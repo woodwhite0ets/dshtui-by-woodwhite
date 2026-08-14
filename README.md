@@ -37,6 +37,12 @@ allowBuilds:
 
 Set `DEEPSEEK_API_KEY` in your environment (or a `.env` in the launch directory or `$DSH_HOME`).
 
+If the profile won't start, inspect the composed plugin tree first:
+
+```sh
+dsh --profile tui --dump-config   # rows: the agent-plane + tui-* front door
+```
+
 ## Local / self-hosted DeepSeek endpoints
 
 No code changes needed — pick one:

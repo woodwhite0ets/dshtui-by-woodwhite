@@ -37,6 +37,12 @@ allowBuilds:
 
 在环境变量（或启动目录 / `$DSH_HOME` 下的 `.env`）里设置 `DEEPSEEK_API_KEY`。
 
+如果 profile 无法启动，先查看组合后的插件树：
+
+```sh
+dsh --profile tui --dump-config   # 行列表：agent-plane + tui-* 前端
+```
+
 ## 本地 / 自部署 DeepSeek 端点
 
 零代码配置，三选一：
