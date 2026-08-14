@@ -1,5 +1,5 @@
 diff --git a/dist/components/editor.d.ts b/dist/components/editor.d.ts
-index a6fedc9e3b36d066e34860d040db6df47d88c432..f0b20eb87686215d1d1a54274a7b1ebdf4030ef1 100644
+index a6fedc9e3b36d066e34860d040db6df47d88c432..9d896aad93b1bc60da04ea0d6dbb3c7253fe419a 100644
 --- a/dist/components/editor.d.ts
 +++ b/dist/components/editor.d.ts
 @@ -21,7 +21,7 @@ export interface TextChunk {
@@ -38,7 +38,7 @@ index a6fedc9e3b36d066e34860d040db6df47d88c432..f0b20eb87686215d1d1a54274a7b1ebd
       * Add a prompt to history for up/down arrow navigation.
       * Called after successful submission.
 diff --git a/dist/components/editor.js b/dist/components/editor.js
-index 6c03aeec4148571558713e885ac7f7df18a511bc..0111317ccab31a1e973b92272d8a668b75a29174 100644
+index 6c03aeec4148571558713e885ac7f7df18a511bc..1b513f2bd11111ebf7152bb420b200b290caee1f 100644
 --- a/dist/components/editor.js
 +++ b/dist/components/editor.js
 @@ -79,7 +79,7 @@ function segmentWithMarkers(text, baseSegmenter, validIds) {
@@ -344,3 +344,242 @@ index 6c03aeec4148571558713e885ac7f7df18a511bc..0111317ccab31a1e973b92272d8a668b
                  for (const chunk of chunks) {
                      visualLines.push({
                          logicalLine: i,
+diff --git a/dist/tui.d.ts b/dist/tui.d.ts
+index 97666aa40160d1da8538635949658a5a2215073b..d0a3e0420b4b548e3f3d463cee6e58890fa8d3c0 100644
+--- a/dist/tui.d.ts
++++ b/dist/tui.d.ts
+@@ -157,6 +157,8 @@ export declare class TUI extends Container {
+     private clearOnShrink;
+     private maxLinesRendered;
+     private previousViewportTop;
++    private scrollOffset;
++    private previousScrollOffset;
+     private fullRedrawCount;
+     private stopped;
+     private pendingOsc11BackgroundReplies;
+@@ -177,6 +179,15 @@ export declare class TUI extends Container {
+      * When false, empty rows remain (reduces redraws on slower terminals).
+      */
+     setClearOnShrink(enabled: boolean): void;
++    /**
++     * Scroll the visible viewport up by `offset` lines from the live bottom
++     * (0 pins it to the bottom). Clamped to the content currently rendered;
++     * the render loop re-clamps after each frame in case the buffer shrank.
++     * @returns The accepted offset.
++     */
++    setScrollOffset(offset: number): number;
++    /** The scroll offset currently in effect (0 = pinned to the live bottom). */
++    getScrollOffset(): number;
+     setFocus(component: Component | null): void;
+     private setFocusInternal;
+     private clearOverlayFocusRestore;
+diff --git a/dist/tui.js b/dist/tui.js
+index 62574431ce65ff9e6d7e68407b2563dcef5c8f3e..d05eb3a179e4be111de244fe4984b60e8dc8b1b5 100644
+--- a/dist/tui.js
++++ b/dist/tui.js
+@@ -127,6 +127,8 @@ export class TUI extends Container {
+     clearOnShrink = process.env.PI_CLEAR_ON_SHRINK === "1"; // Clear empty rows when content shrinks (default: off)
+     maxLinesRendered = 0; // Track terminal's working area (max lines ever rendered)
+     previousViewportTop = 0; // Track previous viewport top for resize-aware cursor moves
++    scrollOffset = 0; // Lines of history shown above the live bottom (0 = pinned to bottom)
++    previousScrollOffset = 0; // Offset rendered last frame, for change detection
+     fullRedrawCount = 0;
+     stopped = false;
+     pendingOsc11BackgroundReplies = 0;
+@@ -170,6 +172,24 @@ export class TUI extends Container {
+     setClearOnShrink(enabled) {
+         this.clearOnShrink = enabled;
+     }
++    /**
++     * Scroll the visible viewport up by `offset` lines from the live bottom
++     * (0 pins it to the bottom). Clamped to the content currently rendered;
++     * the render loop re-clamps after each frame in case the buffer shrank.
++     * @returns The accepted offset.
++     */
++    setScrollOffset(offset) {
++        const maxScroll = Math.max(0, this.previousLines.length - this.terminal.rows);
++        const clamped = Math.min(maxScroll, Math.max(0, Math.floor(offset)));
++        if (this.scrollOffset === clamped)
++            return clamped;
++        this.scrollOffset = clamped;
++        this.requestRender();
++        return clamped;
++    }
++    getScrollOffset() {
++        return this.scrollOffset;
++    }
+     setFocus(component) {
+         this.setFocusInternal({ component, overlayFocusRestore: "clear" });
+     }
+@@ -790,7 +810,7 @@ export class TUI extends Container {
+         }
+     }
+     /** Composite all overlays into content lines (sorted by focusOrder, higher = on top). */
+-    compositeOverlays(lines, termWidth, termHeight) {
++    compositeOverlays(lines, termWidth, termHeight, scrollOffset = 0) {
+         if (this.overlayStack.length === 0)
+             return lines;
+         const result = [...lines];
+@@ -823,7 +843,9 @@ export class TUI extends Container {
+         while (result.length < workingHeight) {
+             result.push("");
+         }
+-        const viewportStart = Math.max(0, workingHeight - termHeight);
++        // Overlays sit at screen-relative positions inside the visible window,
++        // so the window offset shifts their buffer rows with the scroll.
++        const viewportStart = Math.max(0, workingHeight - termHeight - scrollOffset);
+         // Composite each overlay
+         for (const { overlayLines, row, col, w } of rendered) {
+             for (let i = 0; i < overlayLines.length; i++) {
+@@ -951,15 +973,17 @@ export class TUI extends Container {
+     /**
+      * Find and extract cursor position from rendered lines.
+      * Searches for CURSOR_MARKER, calculates its position, and strips it from the output.
+-     * Only scans the bottom terminal height lines (visible viewport).
++     * Only scans the visible viewport window (defaults to the bottom `height` lines).
+      * @param lines - Rendered lines to search
+      * @param height - Terminal height (visible viewport size)
++     * @param viewportTop - First buffer row of the visible window
+      * @returns Cursor position { row, col } or null if no marker found
+      */
+-    extractCursorPosition(lines, height) {
+-        // Only scan the bottom `height` lines (visible viewport)
+-        const viewportTop = Math.max(0, lines.length - height);
+-        for (let row = lines.length - 1; row >= viewportTop; row--) {
++    extractCursorPosition(lines, height, viewportTop = Math.max(0, lines.length - height)) {
++        // Only scan the visible viewport window: the cursor marker sits on the
++        // input row at the buffer bottom, which scrolls out of view above it.
++        const windowBottom = Math.min(lines.length - 1, viewportTop + height - 1);
++        for (let row = windowBottom; row >= viewportTop; row--) {
+             const line = lines[row];
+             const markerIndex = line.indexOf(CURSOR_MARKER);
+             if (markerIndex !== -1) {
+@@ -991,12 +1015,23 @@ export class TUI extends Container {
+         };
+         // Render all components to get new lines
+         let newLines = this.render(width);
++        // Scroll state: the viewport shows the bottom `height` rows by default;
++        // a positive scrollOffset shifts it upward by that many rows.
++        const bufferLength = Math.max(height, newLines.length);
++        const maxScroll = Math.max(0, bufferLength - height);
++        if (this.scrollOffset > maxScroll) {
++            this.scrollOffset = maxScroll;
++        }
++        const scrollOffset = this.scrollOffset;
++        const scrollChanged = scrollOffset !== this.previousScrollOffset;
++        // The visible window: the bottom `height` rows, shifted up by the scroll.
++        const scrollWindowTop = Math.max(0, bufferLength - height - scrollOffset);
+         // Composite overlays into the rendered lines (before differential compare)
+         if (this.overlayStack.length > 0) {
+-            newLines = this.compositeOverlays(newLines, width, height);
++            newLines = this.compositeOverlays(newLines, width, height, scrollOffset);
+         }
+         // Extract cursor position before applying line resets (marker must be found first)
+-        const cursorPos = this.extractCursorPosition(newLines, height);
++        const cursorPos = this.extractCursorPosition(newLines, height, scrollWindowTop);
+         newLines = this.applyLineResets(newLines);
+         // Helper to clear scrollback and viewport and render all new lines
+         const fullRender = (clear) => {
+@@ -1006,8 +1041,15 @@ export class TUI extends Container {
+                 buffer += this.deleteKittyImages(this.previousKittyImageIds);
+                 buffer += "\x1b[2J\x1b[H\x1b[3J"; // Clear screen, home, then clear scrollback
+             }
+-            for (let i = 0; i < newLines.length; i++) {
+-                if (i > 0)
++            // Pinned to the bottom, write the whole buffer and let the terminal
++            // scroll to the tail; scrolled into history, write only the visible
++            // window so the screen shows buffer rows [firstVisible, lastVisible].
++            const firstVisible = scrollOffset > 0 ? scrollWindowTop : 0;
++            const lastVisible = scrollOffset > 0
++                ? Math.min(newLines.length - 1, firstVisible + height - 1)
++                : newLines.length - 1;
++            for (let i = firstVisible; i <= lastVisible; i++) {
++                if (i > firstVisible)
+                     buffer += "\r\n";
+                 const line = newLines[i];
+                 const isImage = isImageLine(line);
+@@ -1026,7 +1068,7 @@ export class TUI extends Container {
+             }
+             buffer += "\x1b[?2026l"; // End synchronized output
+             this.terminal.write(buffer);
+-            this.cursorRow = Math.max(0, newLines.length - 1);
++            this.cursorRow = lastVisible;
+             this.hardwareCursorRow = this.cursorRow;
+             // Reset max lines when clearing, otherwise track growth
+             if (clear) {
+@@ -1035,8 +1077,8 @@ export class TUI extends Container {
+             else {
+                 this.maxLinesRendered = Math.max(this.maxLinesRendered, newLines.length);
+             }
+-            const bufferLength = Math.max(height, newLines.length);
+-            this.previousViewportTop = Math.max(0, bufferLength - height);
++            this.previousViewportTop = scrollOffset > 0 ? firstVisible : Math.max(0, bufferLength - height);
++            this.previousScrollOffset = scrollOffset;
+             this.positionHardwareCursor(cursorPos, newLines.length);
+             this.previousLines = newLines;
+             this.previousKittyImageIds = this.collectKittyImageIds(newLines);
+@@ -1071,6 +1113,13 @@ export class TUI extends Container {
+             fullRender(true);
+             return;
+         }
++        // A scroll change always repaints the window: the screen still shows the
++        // old slice, and the diff below would otherwise find nothing to write.
++        if (scrollChanged) {
++            logRedraw(`scroll offset changed (${this.previousScrollOffset} -> ${scrollOffset})`);
++            fullRender(true);
++            return;
++        }
+         // Content shrunk below the working area and no overlays - re-render to clear empty rows
+         // (overlays need the padding, so only do this when no overlays are active)
+         // Configurable via setClearOnShrink() or PI_CLEAR_ON_SHRINK=0 env var
+@@ -1105,11 +1154,34 @@ export class TUI extends Container {
+             firstChanged = expandedRange.firstChanged;
+             lastChanged = expandedRange.lastChanged;
+         }
++        // While scrolled into history, the screen is static: streamed content
++        // and the hint overlay's own row (which moves with the window top as
++        // the buffer grows) are adopted without a repaint, so the position the
++        // user is reading never jumps. Only changes above the window need the
++        // window repainted in place — never the buffer tail, which would drop
++        // the viewport to the live bottom.
++        if (scrollOffset > 0) {
++            if (firstChanged === -1 || firstChanged >= viewportTop) {
++                logRedraw(`scrolled: changes at/below window (${firstChanged} >= ${viewportTop})`);
++                this.previousLines = newLines;
++                this.previousKittyImageIds = this.collectKittyImageIds(newLines);
++                this.previousWidth = width;
++                this.previousHeight = height;
++                this.previousViewportTop = viewportTop;
++                this.previousScrollOffset = scrollOffset;
++                this.positionHardwareCursor(cursorPos, newLines.length);
++                return;
++            }
++            logRedraw(`scrolled: window content changed (${firstChanged} < ${viewportTop})`);
++            fullRender(true);
++            return;
++        }
+         const appendStart = appendedLines && firstChanged === this.previousLines.length && firstChanged > 0;
+         // No changes - but still need to update hardware cursor position if it moved
+         if (firstChanged === -1) {
+             this.positionHardwareCursor(cursorPos, newLines.length);
+             this.previousViewportTop = prevViewportTop;
++            this.previousScrollOffset = scrollOffset;
+             this.previousHeight = height;
+             return;
+         }
+@@ -1162,6 +1234,7 @@ export class TUI extends Container {
+             this.previousWidth = width;
+             this.previousHeight = height;
+             this.previousViewportTop = prevViewportTop;
++            this.previousScrollOffset = scrollOffset;
+             return;
+         }
+         // Differential rendering can only touch what was actually visible.
+@@ -1309,6 +1382,7 @@ export class TUI extends Container {
+         // Track terminal's working area (grows but doesn't shrink unless cleared)
+         this.maxLinesRendered = Math.max(this.maxLinesRendered, newLines.length);
+         this.previousViewportTop = Math.max(prevViewportTop, finalCursorRow - height + 1);
++        this.previousScrollOffset = scrollOffset;
+         // Position hardware cursor for IME
+         this.positionHardwareCursor(cursorPos, newLines.length);
+         this.previousLines = newLines;

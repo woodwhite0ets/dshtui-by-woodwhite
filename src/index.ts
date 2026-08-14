@@ -57,6 +57,7 @@ import {
   TuiExtensionServiceImpl,
   TuiOverlayManager,
 } from './extension/overlay-manager.ts'
+import { createScrollbackController } from './scrollback.ts'
 
 import {
   parseTuiPromptTemplate,
@@ -505,6 +506,12 @@ export function createTuiChat(
     error: (value: string) => palette.error(value),
     bold: (value: string) => palette.bold(value),
   })
+  const scrollback = createScrollbackController({
+    tui: ui,
+    viewportRows: () => runtime.terminal.rows,
+    dim: (text) => palette.dim(text),
+    display: displayText,
+  })
   const overlayManager = new TuiOverlayManager({
     viewport: () => Object.freeze({
       columns: runtime.terminal.columns,
@@ -531,6 +538,9 @@ export function createTuiChat(
       questionContainer.clear()
       questionContainer.addChild(modal)
       ui.setFocus(component)
+      // The dialog lives at the content bottom; a scrolled viewport must
+      // return there so the question the agent is waiting on stays visible.
+      scrollback.snapToBottom()
       return {
         hide(): void {
           questionContainer.clear()
@@ -1614,6 +1624,18 @@ export function createTuiChat(
 
   const removeInputListener = ui.addInputListener((data) => {
     if (overlayManager.hasActiveOverlay()) return undefined
+    // Viewport navigation into history; PgUp/PgDn are consumed so the editor
+    // never sees a stray escape sequence, and any other key returns to the
+    // live bottom (still reaching the editor unchanged).
+    if (matchesKey(data, Key.pageUp)) {
+      scrollback.pageUp()
+      return { consume: true }
+    }
+    if (matchesKey(data, Key.pageDown)) {
+      scrollback.pageDown()
+      return { consume: true }
+    }
+    if (scrollback.isScrolled()) scrollback.snapToBottom()
     if (matchesKey(data, Key.ctrl('o'))) {
       toggleTools()
       return { consume: true }
@@ -1733,6 +1755,7 @@ export function createTuiChat(
     skillAbort.abort()
     fileSearch.dispose()
     removeInputListener()
+    scrollback.dispose()
     disposeCommandChanges()
     disposeSkillChanges()
     disposePromptChanges()
