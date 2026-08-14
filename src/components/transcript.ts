@@ -2,7 +2,7 @@
  * pi-tui transcript components: the startup banner, user/assistant messages,
  * per-step timing footer, streaming assistant buffer, tool cards, and the todo
  * panel. Each is a pure function of its inputs and the active palette.
- * @module @dshtui/dsh-tui/components/transcript
+ * @module @woodwhite0ets/dsh-tui/components/transcript
  */
 
 import {

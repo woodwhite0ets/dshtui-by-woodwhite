@@ -1,7 +1,7 @@
 /**
  * Mutable terminal-prompt value registry consumed by the TUI template renderer.
  * Values are trusted presentation fragments and may contain ANSI control sequences.
- * @module @dshtui/dsh-tui/prompt
+ * @module @woodwhite0ets/dsh-tui/prompt
  */
 
 import { Context, Service } from '@deepseek-ai/cordis'

@@ -2,7 +2,7 @@
  * Theme-agnostic ANSI palette and derived pi-tui themes for the terminal front
  * door. The palette is built from the standard 16-color ANSI set plus SGR
  * attributes so every terminal remaps it to its active color scheme.
- * @module @dshtui/dsh-tui/components/theme
+ * @module @woodwhite0ets/dsh-tui/components/theme
  */
 
 import type {

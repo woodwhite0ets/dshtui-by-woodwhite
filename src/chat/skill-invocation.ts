@@ -1,7 +1,7 @@
 /**
  * Manual `/skill:<name> [instructions]` parsing and model-visible rendering for
  * the terminal front door.
- * @module @dshtui/dsh-tui/chat/skill-invocation
+ * @module @woodwhite0ets/dsh-tui/chat/skill-invocation
  */
 
 import { assertNever } from '@deepseek-ai/dsh-llm'

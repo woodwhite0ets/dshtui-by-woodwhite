@@ -3,7 +3,7 @@
  *
  * The manager serializes modal ownership, guards extension callbacks, and
  * settles every queued or active operation before terminal teardown.
- * @module @dshtui/dsh-tui/extension/overlay-manager
+ * @module @woodwhite0ets/dsh-tui/extension/overlay-manager
  */
 
 import { Service, type Context } from '@deepseek-ai/cordis'

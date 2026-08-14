@@ -3,7 +3,7 @@
  * paths only: selected values remain ordinary prompt text and file contents
  * stay behind the model-facing `read` tool.
  *
- * @module @dshtui/dsh-tui/chat/file-autocomplete
+ * @module @woodwhite0ets/dsh-tui/chat/file-autocomplete
  */
 
 import { lstat, readdir } from 'node:fs/promises'

@@ -1,7 +1,7 @@
 /**
  * Running token accounting for the terminal footer. Usage is keyed per
  * turn/step so replayed or re-emitted usage replaces rather than double-counts.
- * @module @dshtui/dsh-tui/chat/tokens
+ * @module @woodwhite0ets/dsh-tui/chat/tokens
  */
 
 import type { TokenUsage } from '@deepseek-ai/dsh-llm'

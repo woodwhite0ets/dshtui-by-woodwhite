@@ -1,5 +1,5 @@
 {
-  "name": "@dshtui/dsh-tui",
+  "name": "@woodwhite0ets/dsh-tui",
   "description": "Interactive pi-tui terminal front door for DeepSeek Harness agents",
   "version": "0.1.0",
   "type": "module",
@@ -34,7 +34,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/<owner>/dsh-tui.git"
+    "url": "git+https://github.com/woodwhite0ets/dshtui-by-woodwhite.git"
   },
   "dsh": {
     "bundle": {

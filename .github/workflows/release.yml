@@ -1,6 +1,6 @@
 # Publish to npm on a version tag (v*) via npm trusted publishing (OIDC) — no
 # token secret. One-time setup on npmjs.com: add a trusted publisher for
-# @dshtui/dsh-tui pointing at <owner>/dsh-tui, workflow release.yml, environment
+# @woodwhite0ets/dsh-tui pointing at woodwhite0ets/dshtui-by-woodwhite, workflow release.yml, environment
 # npm.
 name: release
 on:
@@ -49,12 +49,12 @@ jobs:
           if-no-files-found: error
 
   publish:
-    name: Publish @dshtui/dsh-tui
+    name: Publish @woodwhite0ets/dsh-tui
     needs: build
     runs-on: ubuntu-latest
     environment:
       name: npm
-      url: https://www.npmjs.com/package/@dshtui/dsh-tui
+      url: https://www.npmjs.com/package/@woodwhite0ets/dsh-tui
     permissions:
       contents: read
       id-token: write

@@ -3,7 +3,7 @@
  * Git-branch formatting, transcript/tool-call derivations over the session log,
  * session-reference context cards, the placeholder editor, and banner-reveal
  * timing constants. None of these close over channel state.
- * @module @dshtui/dsh-tui/chat/helpers
+ * @module @woodwhite0ets/dsh-tui/chat/helpers
  */
 
 import { execFileSync } from 'node:child_process'

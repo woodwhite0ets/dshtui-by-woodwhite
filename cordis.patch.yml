@@ -1,4 +1,4 @@
-# @dshtui/dsh-tui — the interactive TUI, as a bundle patch layer over
+# @woodwhite0ets/dsh-tui — the interactive TUI, as a bundle patch layer over
 # @deepseek-ai/dsh-base. A patch replaces the targeted row's whole `config`, so
 # each overridden row below restates every key it owns. Later layers (the
 # profile's cordis.patch.yml, $DSH_HOME/cordis.patch.yml, --patch overlays)
@@ -47,7 +47,7 @@
 - insert:
     # Command-line intake and session identity for the rows above.
     - id: tui-startup
-      name: '@dshtui/dsh-tui/startup'
+      name: '@woodwhite0ets/dsh-tui/startup'
 
     # `@session` references in the composer.
     - id: session-reference
@@ -81,12 +81,12 @@
     # The keyboard-backed provider behind ask_user_question and the plan-mode
     # review, and the front door it renders inside.
     - id: tui-prompt
-      name: '@dshtui/dsh-tui/prompt'
+      name: '@woodwhite0ets/dsh-tui/prompt'
 
     # The TUI renders exactly the agent the agent-loop row bound, so it reads
     # the same startup-owned identity rather than restating one.
     - id: tui
-      name: '@dshtui/dsh-tui'
+      name: '@woodwhite0ets/dsh-tui'
       inject: [tuiStartup]
       config:
         sessionId: !!js ctx.tuiStartup.sessionId

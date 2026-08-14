@@ -2,7 +2,7 @@
  * Serializable configuration and defaults for the pi-tui terminal mode. Loader
  * schema validation normally fills defaults; {@link resolveTuiConfig} applies
  * the same defaults for direct callers that bypass the Loader.
- * @module @dshtui/dsh-tui/config
+ * @module @woodwhite0ets/dsh-tui/config
  */
 
 import z from '@deepseek-ai/schemastery'

@@ -1,7 +1,7 @@
 /**
  * Editor autocomplete provider merging path-only file candidates and optional
  * session-reference snapshots with the base slash-command completions.
- * @module @dshtui/dsh-tui/chat/autocomplete
+ * @module @woodwhite0ets/dsh-tui/chat/autocomplete
  */
 
 import {
