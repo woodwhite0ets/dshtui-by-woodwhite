@@ -1,0 +1,77 @@
+# Publish to npm on a version tag (v*) via npm trusted publishing (OIDC) — no
+# token secret. One-time setup on npmjs.com: add a trusted publisher for
+# @openguardrails/dsh-tui pointing at openguardrails/dsh-tui, workflow
+# release.yml, environment npm (the same pattern openguardrails/openguardrails
+# uses for its npm packages).
+name: release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  build:
+    name: Build npm package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Validate tag against package.json
+        shell: bash
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          package_version="$(node -p "require('./package.json').version")"
+          if [[ "$tag_version" != "$package_version" ]]; then
+            echo "::error::Tag version $tag_version does not match package.json $package_version"
+            exit 1
+          fi
+      - run: pnpm install
+      - run: pnpm build
+      - name: Create package tarball
+        shell: bash
+        # scripts.prepare exists so git-hosted installs build from source; the
+        # tarball ships prebuilt lib/, and leaving prepare in would make pnpm
+        # flag every registry install for build-script approval.
+        run: |
+          npm pkg delete scripts.prepare
+          mkdir package
+          npm pack --pack-destination "$GITHUB_WORKSPACE/package"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-package
+          path: package/*.tgz
+          if-no-files-found: error
+
+  publish:
+    name: Publish @openguardrails/dsh-tui
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/@openguardrails/dsh-tui
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: Use an OIDC-capable npm CLI
+        run: npm install --global npm@11
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-package
+          path: package
+      - name: Publish to npm
+        # The leading ./ is load-bearing: npm 11's spec parser reads a bare
+        # "package/foo.tgz" as a GitHub owner/repo shorthand and tries git,
+        # while an explicit path prefix forces the local-tarball spec.
+        run: npm publish ./package/*.tgz --access public
