@@ -7,6 +7,11 @@
 
 # ── base rows this surface overrides ────────────────────────────────────────
 
+# The shared module-reload HMR row stays off, matching headless and web: an
+# interactive long-running process must not hot-swap plugin modules mid-session.
+- id: hmr
+  disabled: true
+
 # `main` is the agent the TUI drives. Its exact session identity (fresh UUID or
 # --resume) is provided by the tui-startup row through the
 # configuredAgentIdentities slot; `inject` makes this row wait for it.
