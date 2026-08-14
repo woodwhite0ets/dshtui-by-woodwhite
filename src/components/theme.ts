@@ -111,8 +111,16 @@ export function paletteSpec(scheme: TerminalColorScheme): {
       // their default foreground, which made every "dim" surface the most
       // prominent text on screen.
       dim: { open: '2;39', close: '22;39', purpose: 'The one recessed tone: tool bodies, chrome, footers' },
-      accent: { open: '95', close: '39', purpose: 'The one emphasis color: role headers, prompt, borders' },
-      brand: { open: '34', close: '39', purpose: 'DeepSeek brand art when truecolor is unavailable' },
+      // DeepSeek brand blue as the one emphasis color: ANSI 94 (bright blue)
+      // reads on dark schemes, ANSI 34 (blue) on light ones.
+      accent: scheme === 'light'
+        ? { open: '34', close: '39', purpose: 'The one emphasis color: role headers, prompt, borders' }
+        : { open: '94', close: '39', purpose: 'The one emphasis color: role headers, prompt, borders' },
+      // Brand art fallback for the banner whale; paired so it never collides
+      // with the accent escape on either scheme.
+      brand: scheme === 'light'
+        ? { open: '94', close: '39', purpose: 'DeepSeek brand art when truecolor is unavailable' }
+        : { open: '34', close: '39', purpose: 'DeepSeek brand art when truecolor is unavailable' },
       // ANSI 36 (cyan) is difficult to read on a light background — use ANSI 34
       // (blue) which is legible on both light and dark schemes.
       code: scheme === 'light'

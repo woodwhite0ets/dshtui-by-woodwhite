@@ -2593,7 +2593,7 @@ describe('pi-tui chat lifecycle and transcript', () => {
 
     // Without truecolor there is no per-frame gray: below the fade midpoint the
     // glyph slot is blank; past it the glyph shows in the palette dim role,
-    // never the accent (ANSI 95).
+    // never the accent.
     const early = await frameAt(60)
     expect(early).not.toMatch(/dsh(?:\x1b\[[0-9;]*m| )*●/u)
     const shown = await frameAt(300)
@@ -6795,8 +6795,8 @@ describe('terminal mounting', () => {
     })
     await tick()
     // The home abbreviation renders with the platform separator: `~/` on POSIX,
-    // `~\` on Windows.
-    expect(terminal.output).toContain('\x1b[95m~' + sep)
+    // `~\` on Windows, in the brand-blue accent.
+    expect(terminal.output).toContain('\x1b[94m~' + sep)
     expect(terminal.output).toContain('\x1b[2;39m (tui-staging)')
     await disposeTuiTestHarness(result)
   })
