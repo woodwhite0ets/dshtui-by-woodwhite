@@ -254,21 +254,20 @@ interface FadingStatus {
   timer: ReturnType<typeof setInterval>
 }
 
-/** Width/height adapter for a modal component rendered inside the base TUI flow. */
-class InlineModalComponent extends Container {
-  constructor(
-    component: Component,
-    private readonly width: number,
-    private readonly maxHeight: number,
-  ) {
-    super()
-    this.addChild(component)
+/**
+ * Blank buffer rows reserving the pinned input overlay's current height, so a
+ * scrolled-to-bottom viewport never hides transcript content behind it. The
+ * height tracks the editor live: a multi-line input pushes the transcript up
+ * exactly as far as the input grows.
+ */
+class InputGap implements Component {
+  constructor(private readonly editor: HintEditor) {}
+
+  render(width: number): string[] {
+    return new Array(this.editor.render(width).length).fill('')
   }
 
-  override render(width: number): string[] {
-    const lines = super.render(Math.max(1, Math.min(width, this.width)))
-    return lines.slice(0, Math.max(1, this.maxHeight))
-  }
+  invalidate(): void {}
 }
 
 /** Lifecycle handle for a mounted interactive terminal channel. */
@@ -298,7 +297,6 @@ export function createTuiChat(
   const ui = new TUI(runtime.terminal, resolved.showHardwareCursor)
   const chat = new Container()
   const todoContainer = new Container()
-  const questionContainer = new Container()
   const inputTemplate = parseTuiPromptTemplate(displayInlineText(resolved.theme.inputPrompt))
   const renderInputPrompt = (): string => renderTuiPromptTemplate(inputTemplate, valueName => ctx.tuiPrompt.get(valueName))
   const initialInputPrompt = renderInputPrompt()
@@ -470,9 +468,15 @@ export function createTuiChat(
   ui.addChild(todoContainer)
   ui.addChild(compactionStatusLine)
   ui.addChild(promptContext)
-  ui.addChild(questionContainer)
-  ui.addChild(editor)
-  ui.setFocus(editor)
+  // The transcript reserves the input's height at its own bottom (InputGap);
+  // the input itself renders as an overlay pinned to the window bottom, so
+  // scrolling the history never moves it and it stays focused while scrolled.
+  ui.addChild(new InputGap(editor))
+  ui.showOverlay(editor, {
+    width: '100%',
+    row: '100%',
+    anchor: 'bottom-center',
+  })
   const updateTerminalTitle = (): void => {
     runtime.terminal.setTitle(displayText(
       sessionTitle === undefined ? resolved.title : `${sessionTitle} — ${resolved.title}`,
@@ -516,6 +520,7 @@ export function createTuiChat(
   const scrollback = createScrollbackController({
     tui: ui,
     viewportRows: () => runtime.terminal.rows,
+    editorRows: () => editor.render(runtime.terminal.columns).length,
     dim: (text) => palette.dim(text),
     display: displayText,
   })
@@ -537,21 +542,24 @@ export function createTuiChat(
               : {},
           })
       }
-      const modal = new InlineModalComponent(
-        component,
-        resolved.questionDialogWidth,
-        resolved.questionDialogMaxHeight,
-      )
-      questionContainer.clear()
-      questionContainer.addChild(modal)
-      ui.setFocus(component)
-      // The dialog lives at the content bottom; a scrolled viewport must
+      const questionOverlay = ui.showOverlay(component, {
+        width: resolved.questionDialogWidth,
+        maxHeight: resolved.questionDialogMaxHeight,
+        row: '100%',
+        anchor: 'bottom-center',
+        // Pin the dialog directly above the pinned input; measure the editor's
+        // current height so a multi-line input is never covered by the question
+        // it waits on. The component itself caps its content to the remaining
+        // rows (questionMaxHeight), so the overlay never overflows the editor.
+        offsetY: -editor.render(runtime.terminal.columns).length,
+      })
+      // The dialog waits at the content bottom; a scrolled viewport must
       // return there so the question the agent is waiting on stays visible.
       scrollback.snapToBottom()
       return {
         hide(): void {
-          questionContainer.clear()
-          ui.setFocus(editor)
+          // The overlay layer returns focus to the pinned input automatically.
+          questionOverlay.hide()
         },
       }
     },

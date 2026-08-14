@@ -5,7 +5,7 @@ settings:
   excludeLinksFromLockfile: false
 
 patchedDependencies:
-  '@earendil-works/pi-tui@0.80.7': 7edf8cb4e8b6b929ee5906045806560a168d02294ab352ba234dcf97ed48140a
+  '@earendil-works/pi-tui@0.80.7': 3163fb2fd2ba23acdbbd5d21bd092f8f5abe4a684df2dad7c6fb5512adefb70d
 
 importers:
 
@@ -113,7 +113,7 @@ importers:
     devDependencies:
       '@earendil-works/pi-tui':
         specifier: 0.80.7
-        version: 0.80.7(patch_hash=7edf8cb4e8b6b929ee5906045806560a168d02294ab352ba234dcf97ed48140a)
+        version: 0.80.7(patch_hash=3163fb2fd2ba23acdbbd5d21bd092f8f5abe4a684df2dad7c6fb5512adefb70d)
       '@types/node':
         specifier: ^24.0.0
         version: 24.13.3
@@ -1810,7 +1810,7 @@ snapshots:
       '@deepseek-ai/cosmokit': 1.8.2
       '@standard-schema/spec': 1.1.0
 
-  '@earendil-works/pi-tui@0.80.7(patch_hash=7edf8cb4e8b6b929ee5906045806560a168d02294ab352ba234dcf97ed48140a)':
+  '@earendil-works/pi-tui@0.80.7(patch_hash=3163fb2fd2ba23acdbbd5d21bd092f8f5abe4a684df2dad7c6fb5512adefb70d)':
     dependencies:
       get-east-asian-width: 1.6.0
       marked: 18.0.5

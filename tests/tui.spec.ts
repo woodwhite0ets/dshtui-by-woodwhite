@@ -2101,9 +2101,13 @@ describe('pi-tui chat lifecycle and transcript', () => {
     expect(result.terminal.output).toContain('1 queued')
     expect(result.terminal.output).not.toContain('2 queued')
 
-    // Draining the last queued message returns the plain hint.
+    // Draining the last queued message returns the plain hint. The pinned
+    // input renders as an overlay, so its rows repaint only on change; force
+    // a full frame (ctrl+l) to read the screen the user sees.
     result.terminal.output = ''
     drainSteering('second')
+    await tick()
+    result.terminal.send('\x0c')
     await tick()
     expect(result.terminal.output).toContain('press enter to steer and esc to cancel')
     expect(result.terminal.output).not.toContain('│')

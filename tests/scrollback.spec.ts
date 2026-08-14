@@ -2,7 +2,8 @@
  * Scrollback viewport: PgUp/PgDn navigate into rendered history, any key
  * returns to the live bottom, streamed content stays out of view while
  * scrolled, and an inline question dialog brings the viewport back so the
- * question the agent is waiting on stays visible.
+ * question the agent is waiting on stays visible. The input stays pinned to
+ * the window bottom throughout, so the hint line floats just above it.
  */
 
 import { describe, expect, it } from 'vitest'
@@ -86,7 +87,8 @@ function viewportTextRows(snapshot: string): string[] {
 function assertScrolled(snapshot: string): void {
   const rows = viewportTextRows(snapshot)
   expect(rows.join('\n'), 'viewport must show the hint line').toContain(HINT_TEXT)
-  expect(rows.at(-1), 'hint must sit on the bottom viewport row').toContain(HINT_TEXT)
+  expect(rows.at(-4), 'hint must sit just above the pinned input').toContain(HINT_TEXT)
+  expect(rows.at(-1), 'the input must stay pinned to the bottom while scrolled').toContain('─')
   expect(rows.join('\n'), 'older content must be visible').toContain('question 0')
   expect(rows.join('\n'), 'newest content must be off-screen').not.toContain('answer 7 fourth')
 }
@@ -95,6 +97,7 @@ function assertPinned(snapshot: string): void {
   const rows = viewportTextRows(snapshot)
   expect(rows.join('\n'), 'hint must be gone at the live bottom').not.toContain(HINT_TEXT)
   expect(rows.join('\n'), 'newest content must be visible').toContain('answer 7 fourth')
+  expect(rows.at(-1), 'the input must stay pinned to the bottom').toContain('─')
 }
 
 describe('scrollback', () => {
@@ -175,8 +178,13 @@ describe('scrollback', () => {
     const rejected = expect(answer).rejects.toMatchObject({ code: 'ASK_ABORTED' })
     await harness.terminal.waitForFrame(beforeQuestion)
     const snapped = await harness.terminal.snapshot()
-    assertPinned(snapped)
-    expect(viewportTextRows(snapped).join('\n'), 'the dialog must be visible').toContain('Continue with this change?')
+    // The modal covers the transcript tail (standard modal behavior), so only
+    // the pieces that must survive are asserted: hint gone, input pinned, and
+    // the dialog the agent is waiting on visible in the live-bottom window.
+    const rows = viewportTextRows(snapped)
+    expect(rows.join('\n'), 'hint must be gone at the live bottom').not.toContain(HINT_TEXT)
+    expect(rows.at(-1), 'the input must stay pinned to the bottom').toContain('─')
+    expect(rows.join('\n'), 'the dialog must be visible').toContain('Continue with this change?')
     controller.abort()
     await rejected
     await dispose(harness)

@@ -1,7 +1,7 @@
 terminal 96x36 buffer=normal length=36 base=0 viewport=0
 lifecycle started=1 stopped=0 progress=inactive
 title "DSH snapshot"
-cursor hidden column=7 viewportRow=9 bufferRow=9
+cursor hidden column=7 viewportRow=34 bufferRow=34
 viewport
 0| " DEEPSEEK HARNESS"
   style 1-1 fg=#4d6bfe bold
@@ -29,15 +29,15 @@ viewport
   style 34-50 dim
   style 53-57 dim
   style 60-69 dim
-8| "────────────────────────────────────────────────────────────────────────────────────────────────"
+8-32| <blank>
+33| "────────────────────────────────────────────────────────────────────────────────────────────────"
   style 0-95 dim
-9| " dsh ❯                                                                                          "
+34| " dsh ❯                                                                                          "
   style 1-1 fg=#4d6bfe bold
   style 2-2 fg=#3982ff bold
   style 3-3 fg=#2498ff bold
   style 5-5 fg=bright-blue bold
   style 6-6 dim
   style 7-7 inverse
-10| "────────────────────────────────────────────────────────────────────────────────────────────────"
+35| "────────────────────────────────────────────────────────────────────────────────────────────────"
   style 0-95 dim
-11-35| <blank>

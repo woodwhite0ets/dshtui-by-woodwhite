@@ -532,7 +532,7 @@ index 62574431ce65ff9e6d7e68407b2563dcef5c8f3e..d05eb3a179e4be111de244fe4984b60e
          // Content shrunk below the working area and no overlays - re-render to clear empty rows
          // (overlays need the padding, so only do this when no overlays are active)
          // Configurable via setClearOnShrink() or PI_CLEAR_ON_SHRINK=0 env var
-@@ -1105,11 +1154,34 @@ export class TUI extends Container {
+@@ -1105,11 +1154,58 @@ export class TUI extends Container {
              firstChanged = expandedRange.firstChanged;
              lastChanged = expandedRange.lastChanged;
          }
@@ -543,15 +543,39 @@ index 62574431ce65ff9e6d7e68407b2563dcef5c8f3e..d05eb3a179e4be111de244fe4984b60e
 +        // window repainted in place — never the buffer tail, which would drop
 +        // the viewport to the live bottom.
 +        if (scrollOffset > 0) {
-+            if (firstChanged === -1 || firstChanged >= viewportTop) {
-+                logRedraw(`scrolled: changes at/below window (${firstChanged} >= ${viewportTop})`);
++            if (firstChanged === -1 || firstChanged >= scrollWindowTop) {
++                logRedraw(`scrolled: changes at/below window (${firstChanged} >= ${scrollWindowTop})`);
 +                this.previousLines = newLines;
 +                this.previousKittyImageIds = this.collectKittyImageIds(newLines);
 +                this.previousWidth = width;
 +                this.previousHeight = height;
-+                this.previousViewportTop = viewportTop;
++                this.previousViewportTop = scrollWindowTop;
 +                this.previousScrollOffset = scrollOffset;
-+                this.positionHardwareCursor(cursorPos, newLines.length);
++                // The window slice is unchanged, so the marker's screen row is
++                // too: only its buffer row moved with the buffer growth. Move
++                // in screen space (new window top vs previous) and keep the
++                // buffer-relative bookkeeping for the diff paths.
++                if (cursorPos) {
++                    const currentScreenRow = hardwareCursorRow - prevViewportTop;
++                    const targetScreenRow = cursorPos.row - scrollWindowTop;
++                    const rowDelta = targetScreenRow - currentScreenRow;
++                    let move = "";
++                    if (rowDelta > 0)
++                        move += `\x1b[${rowDelta}B`;
++                    else if (rowDelta < 0)
++                        move += `\x1b[${-rowDelta}A`;
++                    move += `\x1b[${cursorPos.col + 1}G`;
++                    if (move)
++                        this.terminal.write(move);
++                    this.hardwareCursorRow = cursorPos.row;
++                    if (this.showHardwareCursor)
++                        this.terminal.showCursor();
++                    else
++                        this.terminal.hideCursor();
++                }
++                else {
++                    this.terminal.hideCursor();
++                }
 +                return;
 +            }
 +            logRedraw(`scrolled: window content changed (${firstChanged} < ${viewportTop})`);
@@ -567,7 +591,7 @@ index 62574431ce65ff9e6d7e68407b2563dcef5c8f3e..d05eb3a179e4be111de244fe4984b60e
              this.previousHeight = height;
              return;
          }
-@@ -1162,6 +1234,7 @@ export class TUI extends Container {
+@@ -1162,6 +1258,7 @@ export class TUI extends Container {
              this.previousWidth = width;
              this.previousHeight = height;
              this.previousViewportTop = prevViewportTop;
@@ -575,7 +599,7 @@ index 62574431ce65ff9e6d7e68407b2563dcef5c8f3e..d05eb3a179e4be111de244fe4984b60e
              return;
          }
          // Differential rendering can only touch what was actually visible.
-@@ -1309,6 +1382,7 @@ export class TUI extends Container {
+@@ -1309,6 +1406,7 @@ export class TUI extends Container {
          // Track terminal's working area (grows but doesn't shrink unless cleared)
          this.maxLinesRendered = Math.max(this.maxLinesRendered, newLines.length);
          this.previousViewportTop = Math.max(prevViewportTop, finalCursorRow - height + 1);

@@ -32,6 +32,8 @@ export interface ScrollbackDeps {
   tui: TUI
   /** Current terminal row count; half of it is the page size. */
   viewportRows: () => number
+  /** Current rendered height of the pinned input overlay. */
+  editorRows: () => number
   /** Dim tone for the hint line. */
   dim: (text: string) => string
   /** Escape text at the terminal display boundary. */
@@ -65,12 +67,18 @@ export interface ScrollbackController {
 export function createScrollbackController(deps: ScrollbackDeps): ScrollbackController {
   const pageSize = (): number => Math.max(1, Math.floor(deps.viewportRows() / 2))
   const hintLine = deps.display(HINT_TEXT)
+  // The pinned input overlay owns the bottom rows of the window, so the hint
+  // floats just above it. The offset is fixed at mount (rest-height input);
+  // while a multi-line input grows past that, the gate drops the hint rather
+  // than let it paint over the input.
+  const editorRowsAtMount = deps.editorRows()
   const hint: OverlayHandle = deps.tui.showOverlay(new ScrollHint(deps, hintLine), {
     width: '100%',
     row: '100%',
     anchor: 'bottom-center',
     nonCapturing: true,
-    visible: () => deps.tui.getScrollOffset() > 0,
+    offsetY: -editorRowsAtMount,
+    visible: () => deps.tui.getScrollOffset() > 0 && deps.editorRows() <= editorRowsAtMount,
   })
   return {
     isScrolled: () => deps.tui.getScrollOffset() > 0,

@@ -1,7 +1,7 @@
-terminal 100x34 buffer=normal length=41 base=7 viewport=7
+terminal 100x34 buffer=normal length=34 base=0 viewport=0
 lifecycle started=1 stopped=0 progress=inactive
 title "Unsafe terminal title \\x1b]2;snapshot-controlled\\x07\\x09\\x7f\\x9b31m"
-cursor hidden column=100 viewportRow=33 bufferRow=40
+cursor hidden column=100 viewportRow=30 bufferRow=30
 buffer
 0| " DEEPSEEK HARNESS"
   style 1-8 fg=bright-blue bold
@@ -43,38 +43,24 @@ buffer
   style 0-56 fg=red
 22| "Model wait 0.0s · Completed 2026-07-21 15:00:00                                                     "
   style 0-46 dim
-23| <blank>
-24| "Unsafe turn error \\x1b]2;snapshot-controlled\\x07\\x09\\x7f\\x9b31m                                     "
-  style 0-62 fg=red
-25-26| <blank>
-27| "Plan"
-  style 0-3 fg=bright-blue bold
-28| "  ● Unsafe todo \\x1b]2;snapshot-controlled\\x07\\x09\\x7f\\x9b31m"
-  style 2-2 fg=yellow
-29| "/workspace/project (tui-staging)  deepseek-v4-flash  ↑0 ↓0  0% context"
-  style 0-17 fg=bright-blue bold
-  style 18-31 dim
-  style 34-50 dim
-  style 53-57 dim
-  style 60-69 dim
-30| "                                                                                                    "
-31| "  Question 1/1 (1 unanswered) · Unsafe header \\x1b]2;snapshot-controlled\\x07\\x09\\x7f\\x9b31m         "
+23| "                                                                                                    "
+24| "  Question 1/1 (1 unanswered) · Unsafe header \\x1b]2;snapshot-controlled\\x07\\x09\\x7f\\x9b31m         "
   style 2-90 dim
-32| "  Unsafe question \\x1b]2;snapshot-controlled\\x07\\x09\\x7f\\x9b31m                                     "
-33| "                                                                                                    "
-34| "   › 1. Unsafe option \\x1b]2;snapshot-controlled\\x07\\x09\\x7f\\x9b31m                                 "
+25| "  Unsafe question \\x1b]2;snapshot-controlled\\x07\\x09\\x7f\\x9b31m                                     "
+26| "                                                                                                    "
+27| "   › 1. Unsafe option \\x1b]2;snapshot-controlled\\x07\\x09\\x7f\\x9b31m                                 "
   style 2-66 fg=bright-blue bold
-35| "        Unsafe detail \\x1b]2;snapshot-controlled\\x07\\x09\\x7f\\x9b31m                                 "
+28| "        Unsafe detail \\x1b]2;snapshot-controlled\\x07\\x09\\x7f\\x9b31m                                 "
   style 8-66 dim
-36| "  Tab custom answer • Enter submit • Esc interrupt                                                  "
+29| "  Tab custom answer • Enter submit • Esc interrupt                                                  "
   style 2-49 dim
-37| "                                                                                                    "
-38| "────────────────────────────────────────────────────────────────────────────────────────────────────"
+30| "                                                                                                    "
+31| "────────────────────────────────────────────────────────────────────────────────────────────────────"
   style 0-99 dim
-39| " dsh ❯                                                                                              "
+32| " dsh ❯                                                                                              "
   style 1-3 fg=bright-blue bold
   style 5-5 fg=bright-blue bold
   style 6-6 dim
   style 7-7 inverse
-40| "────────────────────────────────────────────────────────────────────────────────────────────────────"
+33| "────────────────────────────────────────────────────────────────────────────────────────────────────"
   style 0-99 dim
