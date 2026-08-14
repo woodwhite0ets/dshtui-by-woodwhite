@@ -63,7 +63,7 @@ pi-tui is pinned at 0.80.7 with a pnpm patch (editor prompt prefixes) and bundle
 ## Status and known limitations
 
 - Under active development against the pre-release `@deepseek-ai/dsh` rc line; expect breakage until upstream stabilizes. Peer dependencies pin the tested rc.
-- The recovered test suite (`tests/`) predates the port and does not run yet.
+- The recovered test suite (`tests/`) runs green against the rc API (`pnpm vitest run`).
 - A real model turn requires a reachable DeepSeek-compatible endpoint; everything up to the request (composition, rendering, approvals, resume) works keyless.
 
 ## Provenance and license

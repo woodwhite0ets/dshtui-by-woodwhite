@@ -1,12 +1,11 @@
 import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join, resolve, sep } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { CombinedAutocompleteProvider, visibleWidth, type Terminal } from '@earendil-works/pi-tui'
 import AgentRegistry, {
-  agentEvents, assembleContextFor, InboxItemId, type Agent, type InboxItem,
-  type InboxPlacement,
+  agentEvents, assembleContextFor, type Agent,
 } from '@deepseek-ai/dsh-agent'
 import { createUserMessage,
   createToolResultMessage,
@@ -18,10 +17,10 @@ import { createUserMessage,
   createMessage,
   freezeMessage,
 } from '@deepseek-ai/dsh-llm'
-import { GOAL_CHANGE_VERSION, GoalId, renderGoalChange, type GoalSnapshotChangeMeta } from '@deepseek-ai/dsh-goal'
+import { GOAL_CHANGE_VERSION, GoalId, type GoalSnapshotChangeMeta } from '@deepseek-ai/dsh-goal'
 import CommandService, { type CommandInvocation } from '@deepseek-ai/dsh-commands'
-import { COMPACT_CHECKPOINT_SOURCE } from '@deepseek-ai/dsh-compaction'
-import SessionStore, { SessionId, type JsonValue, type SessionEvent, type SessionHeader, type TurnEndReason } from '@deepseek-ai/dsh-session'
+import { CompactionId, compactCheckpointSource } from '@deepseek-ai/dsh-compaction'
+import SessionStore, { SessionId, type JsonValue, type Session, type SessionEvent, type SessionHeader, type TurnEndReason, type UserMessage } from '@deepseek-ai/dsh-session'
 import type { SessionRecord } from '@deepseek-ai/dsh-session-query'
 import SkillService, { type SkillCatalogSnapshot, type SkillDefinition, type SkillProvider, type SkillSummary } from '@deepseek-ai/dsh-skill'
 import type {} from '@deepseek-ai/dsh-session-title'
@@ -41,7 +40,7 @@ import {
   type TuiOverlaySession,
   type TuiRuntime,
 } from '../src/index.ts'
-import { WorkspaceFileSearch } from '../src/chat/file-autocomplete.ts'
+import { formatFileMention, WorkspaceFileSearch } from '../src/chat/file-autocomplete.ts'
 import { ResumePicker } from '../src/components/dialogs.ts'
 import { ATTRIBUTE_ROLES, brandText, COLOR_ROLES, createPalette, paletteSpec } from '../src/components/theme.ts'
 import {
@@ -59,12 +58,38 @@ const UNUSED_TOOL_OUTPUT: ToolDefinition['output'] = {
   render: () => [],
 }
 
-let nextInboxItem = 0
-
-/** Wrap one test message in the production inbox occurrence envelope. */
-function inboxItem(message: InboxItem['message'], placement: InboxPlacement): InboxItem {
-  return { id: InboxItemId(`tui-item-${nextInboxItem++}`), message, placement }
+/**
+ * Durably record one steering message claimed from the next-step inbox:
+ * the inbox splice announces the claim, then the message lands as a
+ * `user/message` on the surface.
+ */
+function appendSteering(session: Session, message: UserMessage): void {
+  session.append('agent/inbox/spliced', {
+    target: 'next-step',
+    start: 0,
+    removedCount: 0,
+    inserted: [{ id: message.id }],
+  })
+  session.append('agent/inbox/spliced', {
+    target: 'next-step',
+    start: 0,
+    removedCount: 1,
+    inserted: [],
+  })
+  session.append('user/message', message, { surfaceOp: 'append' })
 }
+
+/** Model-visible rendering for durable goal mutations, recovered from upstream history. */
+function renderGoalChange(change: GoalSnapshotChangeMeta) {
+  const payload = {
+    goal: change.goal,
+    roundsStarted: change.roundsStarted,
+    createdAt: change.createdAt,
+    updatedAt: change.updatedAt,
+  }
+  return [{ type: 'text' as const, text: `<goal_state>${JSON.stringify(payload)}</goal_state>` }]
+}
+
 
 class FakeTerminal implements Terminal {
   columns = 88
@@ -1561,13 +1586,16 @@ describe('pi-tui chat lifecycle and transcript', () => {
     }
     const result = await setup({
       beforeMount(session) {
+        // The durable goal fold admits a goal round only after the goal/change
+        // snapshot that opened it, mirroring the production goal plugin's log.
+        session.append('goal/change', change)
         session.append('user/message', createUserMessage({
           content: renderGoalChange(change),
           source: {
             kind: 'goal',
             goalId: change.goal.id,
             revision: change.goal.revision,
-            round: 0,
+            round: 1,
             change,
           },
         }), { surfaceOp: 'append' })
@@ -1659,25 +1687,19 @@ describe('pi-tui chat lifecycle and transcript', () => {
     await tick()
 
     result.agent.status = 'running'
-    agentEvents(result.ctx, result.agent).emit('agent/status', 'running')
+    agentEvents(result.ctx, result.agent).emit('agent/status', { status: 'running' })
     now = 8_000
     result.session.append('user/message', createUserMessage({
       content: [{ type: 'text', text: '   ' }], source: { kind: 'user' },
     }), { surfaceOp: 'append' })
-    result.session.append('steering/message', {
-      turn: 2,
-      message: createUserMessage({
-        content: [{ type: 'text', text: 'steering note' }],
-        source: { kind: 'user' },
-      }),
-    }, { surfaceOp: 'append' })
-    result.session.append('steering/message', {
-      turn: 2,
-      message: createUserMessage({
-        content: [{ type: 'text', text: '' }],
-        source: { kind: 'user' },
-      }),
-    }, { surfaceOp: 'append' })
+    appendSteering(result.session, createUserMessage({
+      content: [{ type: 'text', text: 'steering note' }],
+      source: { kind: 'user' },
+    }))
+    appendSteering(result.session, createUserMessage({
+      content: [{ type: 'text', text: '' }],
+      source: { kind: 'user' },
+    }))
     result.session.append('user/message', createUserMessage({
       content: [{ type: 'text', text: 'user context' }], source: { kind: 'user' },
     }), { surfaceOp: 'append' })
@@ -1695,11 +1717,11 @@ describe('pi-tui chat lifecycle and transcript', () => {
     // A non-plugin injected source (goal) has no `plugin` field, so its context
     // card label falls back to the source kind.
     result.session.append('user/message', createUserMessage({
-      content: [{ type: 'text', text: 'goal context' }], source: { kind: 'goal', goalId: 'g1', revision: 1, round: 0 } as never,
+      content: [{ type: 'text', text: 'goal context' }], source: { kind: 'goal', goalId: 'g1', revision: 1, round: 1 } as never,
     }), { surfaceOp: 'append' })
     appendAssistant(result.session, [])
     result.session.append('step/end', { turn: 1, step: 1 })
-    result.session.append('turn/end', { turn: 1, reason: { kind: 'aborted' } })
+    result.session.append('turn/end', { turn: 1, reason: { kind: 'aborted', reason: { kind: 'user' } } })
     result.session.append('turn/start', { turn: 2, trigger: { kind: 'message', source: { kind: 'user' } } })
     result.session.append('turn/end', { turn: 2, reason: { kind: 'completed' } })
     result.session.append('turn/start', { turn: 3, trigger: { kind: 'message', source: { kind: 'user' } } })
@@ -1804,7 +1826,7 @@ describe('pi-tui chat lifecycle and transcript', () => {
     expect(result.terminal.output).toContain('answer after clear')
 
     result.agent.status = 'idle'
-    agentEvents(result.ctx, result.agent).emit('agent/status', 'idle')
+    agentEvents(result.ctx, result.agent).emit('agent/status', { status: 'idle' })
     await tick()
     expect(result.terminal.output).toContain('↑1.8k ↓50')
     expect(result.terminal.output).toContain('deepseek-v4-flash')
@@ -2021,31 +2043,28 @@ describe('pi-tui chat lifecycle and transcript', () => {
     const drainSteering = (text: string): void => {
       const id = result.agent.steeredIds.shift()
       if (id !== undefined) {
-        result.ctx.emit('agent/inbox/dequeue', result.agent, inboxItem(freezeMessage({
+        result.ctx.emit('agent/inbox/claimed', { agent: result.agent, message: freezeMessage({
           id,
           role: 'user',
           content: [{ type: 'text', text }],
           source: { kind: 'user' },
-        }), 'steering'))
+        }) })
       }
-      result.session.append('steering/message', {
-        turn: 1,
-        message: createUserMessage({
-          content: [{ type: 'text', text }],
-          source: { kind: 'user' },
-        }),
-      }, { surfaceOp: 'append' })
+      appendSteering(result.session, createUserMessage({
+        content: [{ type: 'text', text }],
+        source: { kind: 'user' },
+      }))
     }
 
     // A steering queue for a different agent never touches this status line.
     const other = { ...result.agent, id: SessionId('other') } as Agent
     result.terminal.output = ''
-    result.ctx.emit('agent/inbox/enqueue', other, inboxItem(freezeMessage({
+    result.ctx.emit('agent/inbox/claimed', { agent: other, message: freezeMessage({
       id: MessageId('stub'),
       role: 'user',
       content: [{ type: 'text', text: 'elsewhere' }],
       source: { kind: 'user' },
-    }), 'queued'))
+    }) })
     await tick()
     expect(result.terminal.output).not.toContain('queued')
 
@@ -2078,16 +2097,13 @@ describe('pi-tui chat lifecycle and transcript', () => {
     await tick()
     expect(result.terminal.output).toContain('1 queued')
 
-    // A steering/message has no inbox identity and therefore cannot consume a
-    // pending slot by itself.
+    // A non-steering message (no inbox claim, non-user source) cannot consume
+    // a pending slot by itself.
     result.terminal.output = ''
-    result.session.append('steering/message', {
-      turn: 1,
-      message: createUserMessage({
-        content: [{ type: 'text', text: 'continue: goal not reached' }],
-        source: { kind: 'plugin', plugin: 'hooks' },
-      }),
-    }, { surfaceOp: 'append' })
+    result.session.append('user/message', createUserMessage({
+      content: [{ type: 'text', text: 'continue: goal not reached' }],
+      source: { kind: 'plugin', plugin: 'hooks' },
+    }), { surfaceOp: 'append' })
     await tick()
     expect(result.terminal.output).toContain('1 queued')
     result.terminal.output = ''
@@ -2097,10 +2113,10 @@ describe('pi-tui chat lifecycle and transcript', () => {
 
     // The turn ending resets the badge, so the next running turn starts clean.
     result.agent.status = 'idle'
-    result.ctx.emit('agent/status', result.agent, 'idle')
+    result.ctx.emit('agent/status', { agent: result.agent, status: 'idle' })
     result.agent.status = 'running'
     result.terminal.output = ''
-    result.ctx.emit('agent/status', result.agent, 'running')
+    result.ctx.emit('agent/status', { agent: result.agent, status: 'running' })
     await tick()
     expect(result.terminal.output).not.toContain('│')
     expect(result.terminal.output).not.toContain('queued')
@@ -2118,26 +2134,26 @@ describe('pi-tui chat lifecycle and transcript', () => {
     }))
     // Another agent's dequeue/discard, and ones naming no pending id, leave
     // the badge alone.
-    result.ctx.emit('agent/inbox/dequeue', other, inboxItem(discarded[0]!, 'steering'))
-    result.ctx.emit('agent/inbox/dequeue', result.agent, inboxItem(freezeMessage({
+    result.ctx.emit('agent/inbox/claimed', { agent: other, message: discarded[0]! })
+    result.ctx.emit('agent/inbox/claimed', { agent: result.agent, message: freezeMessage({
       id: MessageId('never-queued'),
       role: 'user',
       content: [{ type: 'text', text: 'x' }],
       source: { kind: 'user' },
-    }), 'steering'))
-    result.ctx.emit('agent/inbox/discard', other, discarded.map(message => inboxItem(message, 'steering')))
-    result.ctx.emit('agent/inbox/discard', result.agent, [
-      inboxItem(freezeMessage({
-        id: MessageId('never-queued'),
-        role: 'user',
-        content: [{ type: 'text', text: 'x' }],
-        source: { kind: 'user' },
-      }), 'steering'),
-    ])
+    }) })
+    result.ctx.emit('agent/inbox/discarded', { agent: other, message: discarded[0]! })
+    result.ctx.emit('agent/inbox/discarded', { agent: result.agent, message: freezeMessage({
+      id: MessageId('never-queued'),
+      role: 'user',
+      content: [{ type: 'text', text: 'x' }],
+      source: { kind: 'user' },
+    }) })
     await tick()
     expect(result.terminal.output).toContain('2 queued')
     result.terminal.output = ''
-    result.ctx.emit('agent/inbox/discard', result.agent, discarded.map(message => inboxItem(message, 'steering')))
+    for (const message of discarded) {
+      result.ctx.emit('agent/inbox/discarded', { agent: result.agent, message: message })
+    }
     await tick()
     expect(result.terminal.output).not.toContain('queued')
 
@@ -2232,7 +2248,7 @@ describe('pi-tui chat lifecycle and transcript', () => {
       })
       result.agent.status = 'running'
       result.terminal.output = ''
-      result.ctx.emit('agent/status', result.agent, 'running')
+      result.ctx.emit('agent/status', { agent: result.agent, status: 'running' })
       await tick()
       expect(result.terminal.output).not.toContain('Model wait')
       expect(result.terminal.output).toContain('press enter to steer and esc to cancel')
@@ -2291,7 +2307,7 @@ describe('pi-tui chat lifecycle and transcript', () => {
     // fade-out timer emits intermediate frames, so read the terminal's final
     // rendered prompt row rather than the accumulated stream.
     result.agent.status = 'idle'
-    result.ctx.emit('agent/status', result.agent, 'idle')
+    result.ctx.emit('agent/status', { agent: result.agent, status: 'idle' })
     clock = 2_000
     await new Promise(resolve => setTimeout(resolve, 150))
     await tick()
@@ -2311,7 +2327,7 @@ describe('pi-tui chat lifecycle and transcript', () => {
     const result = await setup({ omitInitialLifecycle: true, now: () => clock })
     const idleWidth = promptWidth(result.terminal.output)
 
-    result.session.append('compact/start', { turn: null })
+    result.session.append('compaction/start', { turn: null })
     clock = 1_000
     result.terminal.output = ''
     await new Promise(resolve => setTimeout(resolve, 75))
@@ -2331,7 +2347,7 @@ describe('pi-tui chat lifecycle and transcript', () => {
 
   it('ignores a numbered compaction bracket while the status line is idle', async () => {
     const result = await setup({ now: () => 1_000 })
-    result.session.append('compact/start', { turn: 1 })
+    result.session.append('compaction/start', { turn: 1 })
     await tick()
 
     expect(result.terminal.output).toContain('dsh > ')
@@ -2344,9 +2360,9 @@ describe('pi-tui chat lifecycle and transcript', () => {
     let clock = 0
     const result = await setup({ omitInitialLifecycle: true, now: () => clock })
     clock = 1_000
-    result.session.append('compact/start', { turn: null })
+    result.session.append('compaction/start', { turn: null })
     await tick()
-    result.session.append('compact/end', { turn: null })
+    result.session.append('compaction/end', { turn: null })
     await tick()
 
     clock = 2_000
@@ -2364,9 +2380,9 @@ describe('pi-tui chat lifecycle and transcript', () => {
 
   it('reports a failed standalone compaction when its live bracket closes', async () => {
     const result = await setup({ omitInitialLifecycle: true, now: () => 1_000 })
-    result.session.append('compact/start', { turn: null })
+    result.session.append('compaction/start', { turn: null })
     result.terminal.output = ''
-    result.session.append('compact/end', { turn: null, error: 'summary failed' })
+    result.session.append('compaction/end', { turn: null, error: 'summary failed' })
     await tick()
 
     expect(result.terminal.output).toContain('Compaction failed: summary failed')
@@ -2377,10 +2393,10 @@ describe('pi-tui chat lifecycle and transcript', () => {
   it('preserves live compaction progress across an idle status edge', async () => {
     let clock = 0
     const result = await setup({ omitInitialLifecycle: true, now: () => clock })
-    result.session.append('compact/start', { turn: null })
+    result.session.append('compaction/start', { turn: null })
     clock = 1_000
     result.terminal.output = ''
-    result.ctx.emit('agent/status', result.agent, 'idle')
+    result.ctx.emit('agent/status', { agent: result.agent, status: 'idle' })
     result.terminal.resize(result.terminal.columns + 1)
     await tick()
 
@@ -2394,12 +2410,12 @@ describe('pi-tui chat lifecycle and transcript', () => {
     const result = await setup({ status: 'running', now: () => clock })
     clock = 1_000
     result.terminal.output = ''
-    result.session.append('compact/start', { turn: null })
+    result.session.append('compaction/start', { turn: null })
     await tick()
 
     expect(result.terminal.output).toContain('dsh ◍ ')
     expect(result.terminal.output).not.toContain('dsh ⊙ ')
-    result.session.append('compact/end', { turn: null })
+    result.session.append('compaction/end', { turn: null })
     await tick()
     result.terminal.output = ''
     result.terminal.resize(result.terminal.columns + 1)
@@ -2421,16 +2437,16 @@ describe('pi-tui chat lifecycle and transcript', () => {
       result = await setup({ omitInitialLifecycle: true, now: () => clock })
       intervalSpy.mockClear()
       clearIntervalSpy.mockClear()
-      result.session.append('compact/start', { turn: null })
+      result.session.append('compaction/start', { turn: null })
       clock = 1_000
-      result.session.append('compact/start', { turn: null })
+      result.session.append('compaction/start', { turn: null })
       await tick()
 
       expect(intervalSpy).toHaveBeenCalledOnce()
       expect(result.terminal.output).toContain('dsh ⊙ ')
       expect(result.terminal.progress.at(-1)).toBe(true)
 
-      result.session.append('compact/end', { turn: null })
+      result.session.append('compaction/end', { turn: null })
       await tick()
       expect(clearIntervalSpy).toHaveBeenCalledOnce()
       expect(result.terminal.progress.at(-1)).toBe(false)
@@ -2449,7 +2465,7 @@ describe('pi-tui chat lifecycle and transcript', () => {
       omitInitialLifecycle: true,
       now: () => 1_000,
       beforeMount(session) {
-        session.append('compact/start', { turn: null })
+        session.append('compaction/start', { turn: null })
       },
     })
 
@@ -2469,7 +2485,7 @@ describe('pi-tui chat lifecycle and transcript', () => {
       result = await setup({ omitInitialLifecycle: true, now: () => 1_000 })
       intervalSpy.mockClear()
       clearIntervalSpy.mockClear()
-      result.session.append('compact/start', { turn: null })
+      result.session.append('compaction/start', { turn: null })
       expect(intervalSpy).toHaveBeenCalledOnce()
 
       await dispose(result)
@@ -2539,7 +2555,7 @@ describe('pi-tui chat lifecycle and transcript', () => {
 
     // End the turn: the last glyph fades out over 300 ms rather than vanishing.
     result.agent.status = 'idle'
-    result.ctx.emit('agent/status', result.agent, 'idle')
+    result.ctx.emit('agent/status', { agent: result.agent, status: 'idle' })
     await tick()
     // Just after the end the glyph still paints a gray, not `>`.
     expect(result.terminal.output).toMatch(/\x1b\[38;2;\d+;\d+;\d+m●/u)
@@ -2624,19 +2640,16 @@ describe('pi-tui chat lifecycle and transcript', () => {
   it('tracks steering drains without a running status line', async () => {
     const result = await setup()
     const source = { kind: 'user' as const }
-    result.ctx.emit('agent/inbox/enqueue', result.agent, inboxItem(freezeMessage({
+    result.ctx.emit('agent/inbox/claimed', { agent: result.agent, message: freezeMessage({
       id: MessageId('stub'),
       role: 'user',
       content: [{ type: 'text', text: 'early' }],
       source,
-    }), 'steering'))
-    result.session.append('steering/message', {
-      turn: 1,
-      message: createUserMessage({
-        content: [{ type: 'text', text: 'early' }],
-        source,
-      }),
-    }, { surfaceOp: 'append' })
+    }) })
+    appendSteering(result.session, createUserMessage({
+      content: [{ type: 'text', text: 'early' }],
+      source,
+    }))
     await tick()
     expect(result.terminal.output).not.toContain('queued')
     await dispose(result)
@@ -2925,7 +2938,7 @@ describe('pi-tui chat lifecycle and transcript', () => {
       text: 'Current instructions \u001B]2;prompt-unsafe\u0007',
     })
     result.agent.status = 'running'
-    agentEvents(result.ctx, result.agent).emit('agent/status', 'running')
+    agentEvents(result.ctx, result.agent).emit('agent/status', { status: 'running' })
     result.terminal.send('/status')
     result.terminal.send('\r')
     await vi.waitFor(() => {
@@ -2945,7 +2958,7 @@ describe('pi-tui chat lifecycle and transcript', () => {
     expect(result.terminal.output).toContain('[█████░░░░░░░░░░░] 33% used (42,000 / 128,000)')
     expect(result.terminal.output).toContain('2026-07-22 09:10:11 UTC')
     expect(result.terminal.output).toContain('System prompt')
-    expect(result.terminal.output).toContain('You are an AI agent powered by the DeepSeek Harness SDK.')
+    expect(result.terminal.output).toContain('You are an AI agent powered by DeepSeek Harness.')
     expect(result.terminal.output).toContain('Current instructions \\x1b]2;prompt-unsafe\\x07')
     expect(result.terminal.output).toContain('Registered tools')
     expect(result.terminal.output).toContain('read, write')
@@ -2984,7 +2997,7 @@ describe('pi-tui chat lifecycle and transcript', () => {
     expect(result.terminal.output).toContain('n/a (0 read + 0 write)')
     expect(result.terminal.output).toContain('7 used · capacity unknown')
     expect(result.terminal.output).toContain('2026-07-22 10:11:12 UTC')
-    expect(result.terminal.output).toContain('You are an AI agent powered by the DeepSeek Harness SDK.')
+    expect(result.terminal.output).toContain('You are an AI agent powered by DeepSeek Harness.')
     expect(result.terminal.output).toContain('(none)')
     await dispose(result)
     dateNow.mockRestore()
@@ -3099,7 +3112,7 @@ describe('pi-tui chat lifecycle and transcript', () => {
     result.terminal.send('\r')
 
     result.agent.status = 'running'
-    result.ctx.emit('agent/status', result.agent, 'running')
+    result.ctx.emit('agent/status', { agent: result.agent, status: 'running' })
     result.terminal.send('steer it')
     result.terminal.send('\r')
     expect(result.agent.steered).toEqual([[{ type: 'text', text: 'steer it' }]])
@@ -3222,24 +3235,16 @@ describe('pi-tui chat lifecycle and transcript', () => {
     result.terminal.send('\r')
     await vi.waitFor(() => { expect(result.agent.sent).toHaveLength(1) })
     expect(result.agent.sent).toEqual([[{ type: 'text', text: '@Source chat' }]])
-    // Idle: the snapshot rides the prompt's admission (additionalContexts on
-    // the allow decision), not a separate pre-admission inject.
-    expect(result.agent.injected).toHaveLength(0)
-    const decision = await agentEvents(result.ctx, result.agent).waterfall(
-      'agent/prompt-submit', result.agent.sentMessages[0]!,
-      new AbortController().signal, () => Promise.resolve({ kind: 'allow' as const }),
-    )
-    expect(decision.kind).toBe('allow')
-    expect(decision.kind === 'allow' && decision.additionalContexts?.[0]?.source)
+    // Idle: the snapshot enters as injected model-facing context ahead of the
+    // prompt (the old prompt-admission waterfall no longer exists; the inbox
+    // delivers both at the next turn).
+    expect(result.agent.injected).toHaveLength(1)
+    expect(result.agent.injectedOptions[0]?.source)
       .toMatchObject({ kind: 'session-reference', references: [{ sessionId: 'source-session' }] })
-
-    // The one-shot wrapper detached itself at admission: replaying the
-    // waterfall attaches nothing a second time.
-    const replay = await agentEvents(result.ctx, result.agent).waterfall(
-      'agent/prompt-submit', result.agent.sentMessages[0]!,
-      new AbortController().signal, () => Promise.resolve({ kind: 'allow' as const }),
-    )
-    expect(replay.kind === 'allow' && replay.additionalContexts).toBeUndefined()
+    expect(result.agent.injectedOptions[0]?.content[0]).toMatchObject({
+      type: 'text',
+      text: expect.stringContaining('Source chat') as never,
+    })
 
     const mention = formatSessionReferenceMention({ sessionId: sourceId, label: 'Source chat' })
     result.agent.status = 'running'
@@ -3248,14 +3253,13 @@ describe('pi-tui chat lifecycle and transcript', () => {
     await vi.waitFor(() => { expect(result.agent.steered).toHaveLength(1) })
     expect(result.agent.steered).toEqual([[{ type: 'text', text: 'steer @Source chat' }]])
     // Steering bypasses admission, so its snapshot still arrives via inject.
-    expect(result.agent.injected).toHaveLength(1)
+    expect(result.agent.injected).toHaveLength(2)
     await dispose(result)
   })
 
-  it('keeps a referenced prompt on admission when running no longer accepts next-step input', async () => {
+  it('steers a referenced prompt while running, snapshot injected alongside', async () => {
     const result = await setup({
       status: 'running',
-      acceptsNextStep: false,
       omitInitialLifecycle: true,
       async configureContext(ctx) {
         ctx.provide('tools', { get: () => undefined } as never)
@@ -3278,196 +3282,14 @@ describe('pi-tui chat lifecycle and transcript', () => {
       label: 'Admission source',
     }))
     result.terminal.send('\r')
-    await vi.waitFor(() => { expect(result.agent.sent).toHaveLength(1) })
+    await vi.waitFor(() => { expect(result.agent.steered).toHaveLength(1) })
 
-    expect(result.agent.steered).toHaveLength(0)
-    expect(result.agent.injected).toHaveLength(0)
-    const decision = await agentEvents(result.ctx, result.agent).waterfall(
-      'agent/prompt-submit', result.agent.sentMessages[0]!,
-      new AbortController().signal, () => Promise.resolve({ kind: 'allow' as const }),
-    )
-    expect(decision.kind === 'allow' && decision.additionalContexts?.[0]?.source)
+    expect(result.agent.sent).toHaveLength(0)
+    // Running steering bypasses admission; the snapshot drains beside the
+    // steered message at the same step boundary.
+    expect(result.agent.injected).toHaveLength(1)
+    expect(result.agent.injectedOptions[0]?.source)
       .toMatchObject({ kind: 'session-reference', references: [{ sessionId: 'admission-src' }] })
-    await dispose(result)
-  })
-
-  it('releases the reference-admission wrapper on the ordinary allowed path', async () => {
-    const result = await setup({
-      async configureContext(ctx) {
-        ctx.provide('tools', { get: () => undefined } as never)
-        await ctx.plugin(TestSessionQueryEngine)
-        await ctx.plugin(SessionReferenceResolver)
-        const source = ctx.sessions.create(SessionId('leak-source'), { meta: { cwd: process.cwd(), createdAt: 1 } })
-        appendUser(source, 'source background')
-      },
-    })
-    const send = async (): Promise<void> => {
-      result.terminal.send('@leak-source')
-      await vi.waitFor(() => { expect(result.terminal.output).toContain('Session · leak-source') })
-      result.terminal.send('\t')
-      await tick()
-      result.terminal.send('\r')
-    }
-    await send()
-    await vi.waitFor(() => { expect(result.agent.sent).toHaveLength(1) })
-    await send()
-    await vi.waitFor(() => { expect(result.agent.sent).toHaveLength(2) })
-
-    // Each wrapper releases on its own identified message's allowed admission.
-    // Running each prompt's admission waterfall detaches its wrapper.
-    for (const sent of result.agent.sentMessages) {
-      await agentEvents(result.ctx, result.agent).waterfall(
-        'agent/prompt-submit', sent,
-        new AbortController().signal, () => Promise.resolve({ kind: 'allow' as const }),
-      )
-    }
-    // Both wrappers now gone: a discard naming either prompt's content finds
-    // no armed listener, and an unrelated admission is untouched. The leak
-    // regression: a listener installed after its cleanup already ran would
-    // survive every future cleanup.
-    result.ctx.emit('agent/inbox/discard', result.agent, [inboxItem(result.agent.sentMessages[0]!, 'queued')])
-    const unrelated = await agentEvents(result.ctx, result.agent).waterfall(
-      'agent/prompt-submit', createUserMessage({
-        content: [{ type: 'text', text: 'unrelated' }],
-        source: { kind: 'user' },
-      }),
-      new AbortController().signal, () => Promise.resolve({ kind: 'allow' as const }),
-    )
-    expect(unrelated.kind === 'allow' && unrelated.additionalContexts).toBeUndefined()
-    // Replaying either sent prompt attaches nothing: the one-shot wrappers
-    // are gone, not merely spent.
-    for (const sent of result.agent.sentMessages) {
-      const replay = await agentEvents(result.ctx, result.agent).waterfall(
-        'agent/prompt-submit', sent,
-        new AbortController().signal, () => Promise.resolve({ kind: 'allow' as const }),
-      )
-      expect(replay.kind === 'allow' && replay.additionalContexts).toBeUndefined()
-    }
-    await dispose(result)
-  })
-
-  it('releases the reference wrapper when enqueue synchronously discards before followup returns', async () => {
-    const result = await setup({
-      async configureContext(ctx) {
-        ctx.provide('tools', { get: () => undefined } as never)
-        await ctx.plugin(TestSessionQueryEngine)
-        await ctx.plugin(SessionReferenceResolver)
-        const source = ctx.sessions.create(SessionId('sync-source'), { meta: { cwd: process.cwd(), createdAt: 1 } })
-        appendUser(source, 'source background')
-      },
-    })
-    // Real send() publishes its already identified snapshot, then an enqueue
-    // listener may synchronously cancel and discard it before followup()
-    // returns that id. This stub reproduces that ordering.
-    const foreign = { ...result.agent, id: SessionId('foreign') } as unknown as Agent
-    result.agent.followup = (input) => {
-      result.agent.sent.push(input.content)
-      result.agent.sentMessages.push(input)
-      const message = freezeMessage({
-        id: input.id,
-        role: 'user' as const,
-        content: structuredClone(input.content),
-        source: structuredClone(input.source),
-      })
-      result.ctx.emit('agent/inbox/enqueue', foreign, inboxItem(message, 'queued'))
-      result.ctx.emit('agent/inbox/enqueue', result.agent, inboxItem(message, 'queued'))
-      result.ctx.emit('agent/inbox/discard', result.agent, [inboxItem(message, 'queued')])
-      return message.id
-    }
-
-    result.terminal.send('@sync-source')
-    await vi.waitFor(() => { expect(result.terminal.output).toContain('Session · sync-source') })
-    result.terminal.send('\t')
-    await tick()
-    result.terminal.send('\r')
-    await vi.waitFor(() => { expect(result.agent.sent).toHaveLength(1) })
-
-    // The synchronous discard released the listeners before followup()
-    // returned the existing id: replaying the prompt's admission attaches no
-    // stranded snapshot, and nothing leaks for the TUI lifetime.
-    const replay = await agentEvents(result.ctx, result.agent).waterfall(
-      'agent/prompt-submit', result.agent.sentMessages[0]!,
-      new AbortController().signal, () => Promise.resolve({ kind: 'allow' as const }),
-    )
-    expect(replay.kind === 'allow' && replay.additionalContexts).toBeUndefined()
-    await dispose(result)
-  })
-
-  it('discards the reference snapshot with its blocked or cancelled prompt', async () => {
-    const result = await setup({
-      async configureContext(ctx) {
-        ctx.provide('tools', { get: () => undefined } as never)
-        await ctx.plugin(TestSessionQueryEngine)
-        await ctx.plugin(SessionReferenceResolver)
-        const source = ctx.sessions.create(SessionId('blocked-source'), { meta: { cwd: process.cwd(), createdAt: 1 } })
-        appendUser(source, 'source background')
-      },
-    })
-    // A downstream admission hook blocks the prompt: the attached snapshot
-    // must be discarded with it, not stranded for the next prompt.
-    let blockPrompts = true
-    result.ctx.on('agent/prompt-submit', async (_agent, _message, _signal, next) =>
-      blockPrompts ? { kind: 'block' as const, reason: 'policy' } : next())
-
-    result.terminal.send('@blocked-source')
-    await vi.waitFor(() => { expect(result.terminal.output).toContain('Session · blocked-source') })
-    result.terminal.send('\t')
-    await tick()
-    result.terminal.send('\r')
-    await vi.waitFor(() => { expect(result.agent.sent).toHaveLength(1) })
-
-    const blocked = await agentEvents(result.ctx, result.agent).waterfall(
-      'agent/prompt-submit', result.agent.sentMessages[0]!,
-      new AbortController().signal, () => Promise.resolve({ kind: 'allow' as const }),
-    )
-    expect(blocked.kind).toBe('block')
-    // Nothing entered history and nothing waits for a later prompt: a fresh
-    // unrelated admission sees no leftover contexts.
-    expect(result.agent.injected).toHaveLength(0)
-    blockPrompts = false
-    const unrelated = await agentEvents(result.ctx, result.agent).waterfall(
-      'agent/prompt-submit', createUserMessage({
-        content: [{ type: 'text', text: 'unrelated' }],
-        source: { kind: 'user' },
-      }),
-      new AbortController().signal, () => Promise.resolve({ kind: 'allow' as const }),
-    )
-    expect(unrelated.kind === 'allow' && unrelated.additionalContexts).toBeUndefined()
-
-    // Second referenced prompt, this time dropped by a broad cancel before
-    // any admission runs: the discard listener releases the wrapper.
-    result.terminal.send('@blocked-source')
-    await vi.waitFor(() => { expect(result.terminal.output).toContain('Session · blocked-source') })
-    result.terminal.send('\t')
-    await tick()
-    result.terminal.send('\r')
-    await vi.waitFor(() => { expect(result.agent.sent).toHaveLength(2) })
-    // A different prompt passing the still-armed wrapper delegates untouched.
-    const passthrough = await agentEvents(result.ctx, result.agent).waterfall(
-      'agent/prompt-submit', createUserMessage({
-        content: [{ type: 'text', text: 'different prompt' }],
-        source: { kind: 'user' },
-      }),
-      new AbortController().signal, () => Promise.resolve({ kind: 'allow' as const }),
-    )
-    expect(passthrough.kind === 'allow' && passthrough.additionalContexts).toBeUndefined()
-    // A foreign agent's discard leaves the wrapper armed.
-    const foreign = { ...result.agent, id: SessionId('foreign') } as unknown as Agent
-    result.ctx.emit('agent/inbox/discard', foreign, [inboxItem(result.agent.sentMessages.at(-1)!, 'queued')])
-    // An unrelated discard for this agent also leaves the wrapper armed.
-    result.ctx.emit('agent/inbox/discard', result.agent, [inboxItem(createUserMessage({
-      content: [{ type: 'text', text: 'unrelated discard' }],
-      source: { kind: 'user' },
-    }), 'queued')])
-    result.ctx.emit('agent/inbox/discard', result.agent, [inboxItem(result.agent.sentMessages.at(-1)!, 'queued')])
-    await tick()
-    // Idempotent: a repeat discard after cleanup is a no-op.
-    result.ctx.emit('agent/inbox/discard', result.agent, [inboxItem(result.agent.sentMessages.at(-1)!, 'queued')])
-    const afterDiscard = await agentEvents(result.ctx, result.agent).waterfall(
-      'agent/prompt-submit', result.agent.sentMessages.at(-1)!,
-      new AbortController().signal, () => Promise.resolve({ kind: 'allow' as const }),
-    )
-    expect(afterDiscard.kind === 'allow' && afterDiscard.additionalContexts).toBeUndefined()
     await dispose(result)
   })
 
@@ -3477,7 +3299,11 @@ describe('pi-tui chat lifecycle and transcript', () => {
     await mkdir(join(cwd, 'docs'), { recursive: true })
     await writeFile(join(cwd, 'src', 'source-file.ts'), 'export const source = true\n')
     await writeFile(join(cwd, 'docs', 'design notes.md'), '# Design\n')
-    await writeFile(join(cwd, 'unsafe\nfile.ts'), 'unsafe name\n')
+    // A name the editor grammar cannot represent safely is never offered. NTFS
+    // rejects control characters outright, so the guard is asserted directly
+    // against the mention formatter instead of a live file.
+    expect(formatFileMention({ path: 'unsafe\nfile.ts', kind: 'file' }, false)).toBeUndefined()
+    expect(formatFileMention({ path: 'unsafe\x1b[31m.ts', kind: 'file' }, false)).toBeUndefined()
     const result = await setup({
       cwd,
       tools: {
@@ -3526,6 +3352,8 @@ describe('pi-tui chat lifecycle and transcript', () => {
 
       result.terminal.send('@unsafe')
       await tick()
+      // No live file can carry a control character on NTFS; the unsafe-name
+      // guard itself is covered by the formatFileMention asserts above.
       expect(result.terminal.output).not.toContain('File · unsafe')
       result.terminal.send('\x03')
     } finally {
@@ -3618,11 +3446,9 @@ describe('pi-tui chat lifecycle and transcript', () => {
     expect(result.agent.sent).toEqual([[
       { type: 'text', text: '@evil\\x1b\\x07\\x9b\\x0as' },
     ]])
-    const decision = await agentEvents(result.ctx, result.agent).waterfall(
-      'agent/prompt-submit', result.agent.sentMessages[0]!,
-      new AbortController().signal, () => Promise.resolve({ kind: 'allow' as const }),
-    )
-    expect(decision.kind === 'allow' && decision.additionalContexts?.[0]?.source)
+    // The snapshot injects with the prompt, preserving the raw session id
+    // while its display label stays escaped.
+    expect(result.agent.injectedOptions[0]?.source)
       .toMatchObject({ references: [{ sessionId: unsafeId }] })
     await dispose(result)
   })
@@ -3635,8 +3461,9 @@ describe('pi-tui chat lifecycle and transcript', () => {
         await ctx.plugin(SessionReferenceResolver)
       },
     })
-    const originalListCandidates = result.ctx.sessionReferences.listCandidates.bind(result.ctx.sessionReferences)
-    const listCandidates = vi.spyOn(result.ctx.sessionReferences, 'listCandidates')
+    const resolver = result.ctx.sessionReferenceResolver
+    const originalListCandidates = resolver.listCandidates.bind(resolver)
+    const listCandidates = vi.spyOn(resolver, 'listCandidates')
 
     result.terminal.send('plain')
     result.terminal.send('\t')
@@ -3731,13 +3558,10 @@ describe('pi-tui chat lifecycle and transcript', () => {
         references: [{ sessionId: 'steering-source', label: 'Steering source' }],
       } as never,
     }), { surfaceOp: 'append' })
-    result.session.append('steering/message', {
-      turn: 1,
-      message: createUserMessage({
-        content: [{ type: 'text', text: 'visible steering prompt' }],
-        source: { kind: 'user' },
-      }),
-    }, { surfaceOp: 'append' })
+    appendSteering(result.session, createUserMessage({
+      content: [{ type: 'text', text: 'visible steering prompt' }],
+      source: { kind: 'user' },
+    }))
     await tick()
     expect(result.terminal.output).toContain('visible steering prompt')
     expect(result.terminal.output).toContain('Referenced sessions · Steering source (steering-source)')
@@ -3807,7 +3631,7 @@ describe('pi-tui chat lifecycle and transcript', () => {
     const mention = formatSessionReferenceMention({ sessionId: SessionId('source') })
     const value = `use ${mention}`
     let release: (() => void) | undefined
-    const prepare = vi.spyOn(result.ctx.sessionReferences, 'prepare').mockImplementation(
+    const prepare = vi.spyOn(result.ctx.sessionReferenceResolver, 'prepare').mockImplementation(
       (_agent, content) => new Promise((resolve) => {
         release = () => { resolve({ content }) }
       }),
@@ -3855,7 +3679,7 @@ describe('pi-tui chat lifecycle and transcript', () => {
       },
     })
     let resolveAfterDispose: (() => void) | undefined
-    const latePrepare = vi.spyOn(lateSuccess.ctx.sessionReferences, 'prepare').mockImplementation(
+    const latePrepare = vi.spyOn(lateSuccess.ctx.sessionReferenceResolver, 'prepare').mockImplementation(
       (_agent, content) => new Promise((resolve) => {
         resolveAfterDispose = () => { resolve({ content }) }
       }),
@@ -4002,10 +3826,7 @@ describe('pi-tui chat lifecycle and transcript', () => {
     }
     await result.ctx.systemPrompt.assemble(assembleContextFor(result.agent))
     await expect(agentEvents(result.ctx, result.agent).waterfall(
-      'agent/request',
-      0,
-      0,
-      new AbortController().signal,
+      'agent/request', { turn: 0, step: 0, signal: new AbortController().signal },
       () => Promise.resolve(explicitResetSeed),
     )).resolves.toEqual({ provider: 'alpha', model: 'shared' })
 
@@ -4038,10 +3859,7 @@ describe('pi-tui chat lifecycle and transcript', () => {
       reasoningEffort: ReasoningEffortId('max'),
     }
     await expect(agentEvents(result.ctx, result.agent).waterfall(
-      'agent/request',
-      0,
-      0,
-      new AbortController().signal,
+      'agent/request', { turn: 0, step: 0, signal: new AbortController().signal },
       () => Promise.resolve(inheritedEffort),
     )).resolves.toEqual({ provider: 'beta', model: 'shared' })
 
@@ -4075,7 +3893,7 @@ describe('pi-tui chat lifecycle and transcript', () => {
     await tick()
     expect(result.agent.cancelled).not.toContain('cancelled from terminal')
     result.agent.status = 'idle'
-    result.ctx.emit('agent/status', result.agent, 'idle')
+    result.ctx.emit('agent/status', { agent: result.agent, status: 'idle' })
     await tick()
     expect(result.terminal.output).toContain('b1 max  ')
     expect(result.terminal.output).toContain('25% context')
@@ -4089,7 +3907,8 @@ describe('pi-tui chat lifecycle and transcript', () => {
     expect(assembly.variables).toMatchObject({ provider: 'beta', model: 'b1' })
     const seed: LlmCallConfig = { provider: 'alpha', model: 'a1', temperature: 0.2 }
     const request = await agentEvents(result.ctx, result.agent).waterfall(
-      'agent/request', 1, 0, new AbortController().signal, () => Promise.resolve(seed),
+      'agent/request', { turn: 1, step: 0, signal: new AbortController().signal },
+      () => Promise.resolve(seed),
     )
     expect(request).toEqual({
       provider: 'beta',
@@ -4174,7 +3993,8 @@ describe('pi-tui chat lifecycle and transcript', () => {
     expect(assembly.variables).toEqual({})
     const seed: LlmCallConfig = { provider: 'fallback', model: 'fallback' }
     await expect(agentEvents(empty.ctx, empty.agent).waterfall(
-      'agent/request', 1, 0, new AbortController().signal, () => Promise.resolve(seed),
+      'agent/request', { turn: 1, step: 0, signal: new AbortController().signal },
+      () => Promise.resolve(seed),
     )).resolves.toBe(seed)
     await dispose(empty)
 
@@ -4479,15 +4299,15 @@ describe('pi-tui chat lifecycle and transcript', () => {
     unrelatedSession.append('turn/start', { turn: 1, trigger: { kind: 'message', source: { kind: 'user' } } })
     unrelatedSession.append('todo/write', { todos: [{ content: 'hidden', status: 'pending' }] })
     agentEvents(events.ctx, unrelatedAgent).emit('agent/status', 'running')
-    agentEvents(events.ctx, unrelatedAgent).emit('agent/error', 1, 1, new Error('hidden error'))
+    agentEvents(events.ctx, unrelatedAgent).emit('agent/error', { turn: 1, error: new Error('hidden error') })
     agentEvents(events.ctx, unrelatedAgent).emit('agent/disposed')
-    agentEvents(events.ctx, events.agent).emit('agent/error', 1, 1, new Error('live failure'))
+    agentEvents(events.ctx, events.agent).emit('agent/error', { turn: 1, error: new Error('live failure') })
     events.session.append('step/end', { turn: 1, step: 1 })
-    events.session.append('turn/end', { turn: 1, reason: { kind: 'error', step: 1, message: 'live failure' } })
+    events.session.append('turn/end', { turn: 1, reason: { kind: 'error', error: { message: 'live failure', code: 'UNKNOWN' } } })
     events.session.append('turn/start', { turn: 2, trigger: { kind: 'message', source: { kind: 'user' } } })
-    events.session.append('turn/end', { turn: 2, reason: { kind: 'error', step: 1, message: 'durable failure' } })
+    events.session.append('turn/end', { turn: 2, reason: { kind: 'error', error: { message: 'durable failure', code: 'UNKNOWN' } } })
     events.session.append('turn/start', { turn: 3, trigger: { kind: 'message', source: { kind: 'user' } } })
-    events.session.append('turn/end', { turn: 3, reason: { kind: 'aborted' } })
+    events.session.append('turn/end', { turn: 3, reason: { kind: 'aborted', reason: { kind: 'user' } } })
     events.session.append('turn/start', { turn: 4, trigger: { kind: 'message', source: { kind: 'user' } } })
     events.session.append('turn/end', { turn: 4, reason: { kind: 'max-tokens' } })
     events.session.append('turn/start', { turn: 5, trigger: { kind: 'message', source: { kind: 'user' } } })
@@ -4495,10 +4315,10 @@ describe('pi-tui chat lifecycle and transcript', () => {
     events.session.append('turn/start', { turn: 6, trigger: { kind: 'message', source: { kind: 'user' } } })
     events.session.append('turn/end', {
       turn: 6,
-      reason: { kind: 'error', step: 1, failure: { message: 'structured provider failure', code: 'SERVER' } },
+      reason: { kind: 'error', error: { message: 'structured provider failure', code: 'SERVER' } },
     })
     events.session.append('turn/start', { turn: 8, trigger: { kind: 'message', source: { kind: 'user' } } })
-    events.session.append('turn/end', { turn: 8, reason: { kind: 'disposed' } })
+    events.session.append('turn/end', { turn: 8, reason: { kind: 'aborted', reason: { kind: 'disposed' } } })
     events.session.append('turn/start', { turn: 9, trigger: { kind: 'message', source: { kind: 'user' } } })
     // Merge-extensible reason kind unknown to the TUI still names the stop.
     events.session.append('turn/end', { turn: 9, reason: { kind: 'plugin-policy' } as never })
@@ -5590,7 +5410,7 @@ describe('tool cards and surface replay', () => {
     const nodes = [...result.session.surface.nodes]
     const checkpoint = result.session.append('user/message', createUserMessage({
       content: [{ type: 'text', text: '<context_checkpoint>model-only summary payload</context_checkpoint>' }],
-      source: COMPACT_CHECKPOINT_SOURCE,
+      source: compactCheckpointSource(CompactionId('live-compaction')),
     }), {
       surfaceOp: { op: 'replace', start: nodes[0] as number, end: nodes.at(-1) as number },
       sourceEventSeqs: nodes,
@@ -5669,7 +5489,7 @@ describe('tool cards and surface replay', () => {
         const nodes = [...session.surface.nodes]
         session.append('user/message', createUserMessage({
           content: [{ type: 'text', text: '<context_checkpoint>stored model-only payload</context_checkpoint>' }],
-          source: COMPACT_CHECKPOINT_SOURCE,
+          source: compactCheckpointSource(CompactionId('test-compaction')),
         }), {
           surfaceOp: { op: 'replace', start: nodes[0] as number, end: nodes.at(-1) as number },
           sourceEventSeqs: nodes,
@@ -6799,10 +6619,10 @@ describe('terminal mounting', () => {
     const exit = vi.fn()
     mountTui(ctx, { sessionId: 'main-session', theme: { color: false } }, { terminal, exit })
 
-    ctx.emit('agent-loop/config-start-failed', SessionId('other-session'), new Error('other failed'))
+    ctx.emit('agent-loop/config-start-failed', { sessionId: SessionId('other-session'), error: new Error('other failed') })
     expect(terminal.output).toBe('')
     expect(exit).not.toHaveBeenCalled()
-    ctx.emit('agent-loop/config-start-failed', SessionId('main-session'), new Error('resume \u001b]2;failure-controlled\u0007'))
+    ctx.emit('agent-loop/config-start-failed', { sessionId: SessionId('main-session'), error: new Error('resume \u001b]2;failure-controlled\u0007') })
     expect(terminal.output).toBe('ui-tui: session "main-session" failed to start: resume \\x1b]2;failure-controlled\\x07\n')
     expect(exit).toHaveBeenCalledWith(1)
 
@@ -6829,8 +6649,11 @@ describe('terminal mounting', () => {
     const exit = vi.fn()
 
     mountTui(ctx, { sessionId: 'main-session', theme: { color: false } }, { terminal, exit })
-    ctx.emit('agent-loop/config-start-failed', SessionId('main-session'), {
-      toString(): string { throw new Error('coercion failed') },
+    ctx.emit('agent-loop/config-start-failed', {
+      sessionId: SessionId('main-session'),
+      error: {
+        toString(): string { throw new Error('coercion failed') },
+      },
     })
 
     expect(terminal.started).toBe(0)
@@ -6971,7 +6794,9 @@ describe('terminal mounting', () => {
       cwd: join(homedir(), 'projects', 'dsh-tui'),
     })
     await tick()
-    expect(terminal.output).toContain('\x1b[95m~/')
+    // The home abbreviation renders with the platform separator: `~/` on POSIX,
+    // `~\` on Windows.
+    expect(terminal.output).toContain('\x1b[95m~' + sep)
     expect(terminal.output).toContain('\x1b[2;39m (tui-staging)')
     await disposeTuiTestHarness(result)
   })
