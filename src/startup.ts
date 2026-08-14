@@ -6,6 +6,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { spawn } from 'node:child_process'
 import { Command } from 'commander'
 import type { Context } from '@deepseek-ai/cordis'
 import { parseCmdline } from '@deepseek-ai/dsh-cmdline'
@@ -74,14 +75,18 @@ export function apply(ctx: Context): void {
 /**
  * Provide the in-place `/resume` handoff when the platform supports it: the
  * selected session re-enters through this same intake by re-execing the dsh
- * entry with a normalized `--resume` flag. Without `process.execve` or a known
- * entry, sessions stay selectable but not resumable in place.
+ * entry with a normalized `--resume` flag. Without a process-replacement path
+ * or a known entry, sessions stay selectable but not resumable in place.
  * @param ctx - plugin context whose root fiber owns the whole app tree.
  */
-function installResumeHost(ctx: Context): void {
+export function installResumeHost(ctx: Context): void {
   const entry = process.argv[1]
   const execve = process.execve?.bind(process)
-  if (entry === undefined || execve === undefined) return
+  // Windows ships no working execve (the stub throws
+  // ERR_FEATURE_UNAVAILABLE_ON_PLATFORM when called), so the handoff spawns an
+  // inheriting child there instead. POSIX replaces the process in place.
+  const win32 = process.platform === 'win32'
+  if (entry === undefined || (!win32 && execve === undefined)) return
   // Launcher args minus every `--resume` occurrence, so the handoff target
   // keeps the invoking profile and overlays while swapping the session.
   const baseArgs: string[] = []
@@ -97,7 +102,7 @@ function installResumeHost(ctx: Context): void {
   }
   const host: TuiResumeHost = {
     async handoff(sessionId, cwd): Promise<never> {
-      // `execve` inherits the cwd, and the target session may belong to
+      // The replacement inherits the cwd, and the target session may belong to
       // another workspace. Enter it BEFORE teardown commits: an unreachable
       // directory must reject while the caller can still restore the terminal.
       try {
@@ -107,7 +112,9 @@ function installResumeHost(ctx: Context): void {
       }
       try {
         await ctx.root.fiber.dispose()
-        execve(process.execPath, [process.execPath, ...process.execArgv, entry, ...baseArgs, `--resume=${sessionId}`], process.env)
+        const target = [process.execPath, ...process.execArgv, entry, ...baseArgs, `--resume=${sessionId}`]
+        if (win32) return await spawnHandoff(target)
+        execve!(process.execPath, target, process.env)
         throw new Error('process replacement returned unexpectedly')
       } catch (error) {
         process.stderr.write(`dsh-tui: resume handoff failed after terminal release: ${String(error)}\n`)
@@ -116,4 +123,20 @@ function installResumeHost(ctx: Context): void {
     },
   }
   ctx.provide('tuiResumeHost', host)
+}
+
+/**
+ * Windows handoff: spawn the dsh entry as an inheriting child and park the
+ * parent until the child exits, so the console never returns to the shell
+ * mid-session and the child owns it for its whole run.
+ * @param target - `process.execPath` plus the normalized `--resume` argv.
+ * @returns A never-settling promise; the process exits through the child's
+ *   `exit` event, or through the outer handoff catch on a spawn failure.
+ */
+function spawnHandoff(target: readonly string[]): Promise<never> {
+  const child = spawn(process.execPath, [...target], { stdio: 'inherit', env: process.env })
+  return new Promise<never>((_resolve, reject) => {
+    child.once('error', reject)
+    child.once('exit', code => process.exit(code ?? 0))
+  })
 }
