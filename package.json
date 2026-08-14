@@ -34,7 +34,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/openguardrails/dsh-tui.git"
+    "url": "git+https://github.com/<owner>/dsh-tui.git"
   },
   "dsh": {
     "bundle": {

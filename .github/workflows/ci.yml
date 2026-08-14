@@ -1,0 +1,61 @@
+# Unit suite, typecheck, and build on the supported Node floors, plus an
+# end-to-end wiring job: install the real dsh CLI, add this bundle to a scratch
+# profile, and assert the composition keeps the headless agent-plane intact.
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: ['22.19', '24']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm build
+      - run: pnpm test
+
+  wiring:
+    name: End-to-end dsh wiring
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Install the dsh CLI (next)
+        run: npm i -g @deepseek-ai/dsh@next
+      - name: Add the bundle to a scratch profile
+        run: dsh plugin --profile ci-tui add "$PWD"
+      - name: Assert the composition keeps the headless agent-plane
+        shell: bash
+        run: |
+          dsh --profile ci-tui --dump-config > /tmp/ci-tui.yml
+          # The front door and the agent loop it drives.
+          grep -q '^- id: tui$' /tmp/ci-tui.yml
+          grep -q '^- id: agent-loop' /tmp/ci-tui.yml
+          # Agent-plane rows the web surface disables stay on, like headless.
+          grep -q '^- id: tool-bash' /tmp/ci-tui.yml
+          grep -q '^- id: goal$' /tmp/ci-tui.yml
+          grep -q '^- id: plan-mode' /tmp/ci-tui.yml
+          # The shared hmr row stays off, matching headless and web.
+          grep -A 6 '^- id: hmr$' /tmp/ci-tui.yml | grep -q 'disabled: true'
