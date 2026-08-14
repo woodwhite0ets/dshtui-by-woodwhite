@@ -3,7 +3,7 @@
  * host and the {@link TuiRuntime} the shipped CLI supplies (terminal, process
  * exit, clock, and optional prompt/git overrides). These are plain interfaces so
  * tests can drive the channel with a fake terminal.
- * @module @deepseek-ai/dsh-tui/runtime
+ * @module @dshtui/dsh-tui/runtime
  */
 
 import type { Terminal } from '@earendil-works/pi-tui'

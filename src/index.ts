@@ -2,7 +2,7 @@
  * Interactive pi-tui front door for DeepSeek Harness agents. It renders the
  * durable session transcript, drives one configured agent, and provides
  * keyboard-driven user-interaction dialogs without owning agent lifecycle.
- * @module @deepseek-ai/dsh-tui
+ * @module @dshtui/dsh-tui
  */
 
 import {

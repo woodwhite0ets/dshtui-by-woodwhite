@@ -2,7 +2,7 @@
  * pi-tui dialog and selector components for the terminal front door: the status
  * card, prompt-context line, model selector, resume picker, and user-question
  * dialog, plus the model-choice and resume-candidate data they present.
- * @module @deepseek-ai/dsh-tui/components/dialogs
+ * @module @dshtui/dsh-tui/components/dialogs
  */
 
 import {

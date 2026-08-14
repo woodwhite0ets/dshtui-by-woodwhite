@@ -1,7 +1,7 @@
 /**
  * Content-block primitives shared across the terminal front door: flattening
  * session content to display text and parsing tool-call arguments.
- * @module @deepseek-ai/dsh-tui/components/content
+ * @module @dshtui/dsh-tui/components/content
  */
 
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'

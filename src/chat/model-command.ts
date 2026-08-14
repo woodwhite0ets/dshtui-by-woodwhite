@@ -4,7 +4,7 @@
  * selection, and resolution of the selected model's context window. Owns the
  * context-window cache the prompt and status views read; the caller owns the
  * shared {@link ModelSelectionRef}.
- * @module @deepseek-ai/dsh-tui/chat/model-command
+ * @module @dshtui/dsh-tui/chat/model-command
  */
 
 import type { ModelSelection, ModelSelectionRef } from '@deepseek-ai/dsh-agent'

@@ -5,7 +5,7 @@
  * it needs. Value collaborators (`ctx`, `resolved`, `palette`, `overlayManager`)
  * are stable for the channel's life; the callbacks stay on the object so a
  * controller always calls the channel's current implementation.
- * @module @deepseek-ai/dsh-tui/chat/channel
+ * @module @dshtui/dsh-tui/chat/channel
  */
 
 import type { Context } from '@deepseek-ai/cordis'

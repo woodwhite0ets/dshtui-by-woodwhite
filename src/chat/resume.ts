@@ -2,7 +2,7 @@
  * Session-resume sub-controller for the interactive chat channel: the
  * `/resume` selector, one metadata-plus-title scan that tolerates a corrupt
  * neighbor, the pre-handoff preflight, and the terminal handoff itself.
- * @module @deepseek-ai/dsh-tui/chat/resume
+ * @module @dshtui/dsh-tui/chat/resume
  */
 
 import { stat } from 'node:fs/promises'

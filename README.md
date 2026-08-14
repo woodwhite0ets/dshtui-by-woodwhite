@@ -28,7 +28,7 @@ dsh --profile tui                                      # start a session in the 
 dsh --profile tui --resume <session-id>                # resume a persisted session
 ```
 
-To track the repo instead of the npm release, use `add github:openguardrails/dsh-tui`. Git-hosted plugins build on install via their `prepare` script, which pnpm blocks until you allow it: if that `add` fails, append the key it prints under `allowBuilds` in `~/.dsh/profiles/tui/pnpm-workspace.yaml` and re-run —
+To track the repo instead of the npm release, use `add github:<owner>/dsh-tui` (replace `<owner>` once the repo is published). Git-hosted plugins build on install via their `prepare` script, which pnpm blocks until you allow it: if that `add` fails, append the key it prints under `allowBuilds` in `~/.dsh/profiles/tui/pnpm-workspace.yaml` and re-run —
 
 ```yaml
 allowBuilds:
