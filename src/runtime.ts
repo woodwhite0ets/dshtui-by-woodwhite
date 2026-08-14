@@ -15,14 +15,14 @@ export interface TuiResumeHost {
    * Dispose the current app and replace it with a runtime for `sessionId` in
    * `cwd`. Success does not return. A host may reject before it commits
    * teardown; after commit it owns fatal reporting and process exit.
-   * @param sessionId - validated persisted session selected by the user.
-   * @param cwd - the selected session's own workspace, which the replacement
-   *   process must run in: process cwd, not the restored session header, is what
-   *   filesystem and shell tools resolve against. It may differ from the current
-   *   workspace, so a host that cannot enter it must reject before committing
-   *   teardown.
+   * @param sessionId - validated persisted session selected by the user, or
+   *   `undefined` to re-enter without a `--resume` and mint a fresh session.
+   * @param cwd - the workspace the replacement process must run in: process
+   *   cwd, not the restored session header, is what filesystem and shell tools
+   *   resolve against. It may differ from the current workspace, so a host
+   *   that cannot enter it must reject before committing teardown.
    */
-  handoff(sessionId: SessionId, cwd: string): Promise<never>
+  handoff(sessionId: SessionId | undefined, cwd: string): Promise<never>
 }
 
 declare module '@deepseek-ai/cordis' {

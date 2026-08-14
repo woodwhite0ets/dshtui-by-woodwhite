@@ -7,7 +7,7 @@ import { defineConfig } from 'tsdown'
  * (emitDeclarationOnly into lib/types); `pnpm build` runs both.
  */
 export default defineConfig({
-  entry: ['src/index.ts', 'src/invariant.ts', 'src/prompt.ts', 'src/startup.ts'],
+  entry: ['src/index.ts', 'src/autoresume.ts', 'src/invariant.ts', 'src/prompt.ts', 'src/startup.ts'],
   outDir: 'lib',
   format: ['esm'],
   platform: 'node',

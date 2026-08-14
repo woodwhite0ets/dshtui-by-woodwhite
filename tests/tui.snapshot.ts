@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import { agentEvents } from '@deepseek-ai/dsh-agent'
-import { COMPACT_CHECKPOINT_SOURCE } from '@deepseek-ai/dsh-compaction'
+import { CompactionId, compactCheckpointSource } from '@deepseek-ai/dsh-compaction'
 import { createUserMessage, CallId, type ContentBlock , createMessage, createToolResultMessage } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-llm-retry'
 import { SessionId, type JsonValue, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
@@ -243,7 +243,7 @@ function appendCompactionCheckpoint(session: Session, range: CompactionRange): v
       type: 'text',
       text: '<context_checkpoint>\nModel-only summary payload that must never reach the transcript.\n</context_checkpoint>',
     }],
-    source: COMPACT_CHECKPOINT_SOURCE,
+    source: compactCheckpointSource(CompactionId('fixture-compaction')),
   }), {
     surfaceOp: { op: 'replace', start: range.start, end: range.end },
     sourceEventSeqs: range.sources,
@@ -743,7 +743,7 @@ describe('TUI terminal-state snapshots', () => {
         session.append('step/end', { turn: 1, step: 1 })
         session.append('turn/end', {
           turn: 1,
-          reason: { kind: 'error', step: 1, message: `Unsafe turn error ${CONTROL_PROBE}` },
+          reason: { kind: 'error', error: { message: `Unsafe turn error ${CONTROL_PROBE}`, code: 'UNKNOWN' } },
         })
       },
     }, { columns: 100, rows: 34 })

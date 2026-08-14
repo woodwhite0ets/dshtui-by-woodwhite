@@ -14,6 +14,10 @@
       "types": "./lib/types/startup.d.ts",
       "default": "./lib/startup.js"
     },
+    "./autoresume": {
+      "types": "./lib/types/autoresume.d.ts",
+      "default": "./lib/autoresume.js"
+    },
     "./prompt": {
       "types": "./lib/types/prompt.d.ts",
       "default": "./lib/prompt.js"

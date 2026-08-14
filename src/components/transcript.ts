@@ -187,6 +187,28 @@ export class UserMessageComponent extends Container {
 }
 
 /**
+ * How reasoning blocks display: hidden drops them entirely, folded shows a
+ * single disclosure row (Claude-style thinking), expanded shows the full body.
+ */
+export type ReasoningMode = 'hidden' | 'folded' | 'expanded'
+
+/** Reasoning display labels, shared by the /details dialog and notices. */
+export const REASONING_LABELS: Record<ReasoningMode, string> = {
+  hidden: 'hidden',
+  folded: 'folded',
+  expanded: 'shown',
+}
+
+/** Reasoning display cycle: hidden -> folded -> expanded -> hidden. */
+export const REASONING_CYCLE: readonly ReasoningMode[] = ['hidden', 'folded', 'expanded']
+
+/** One-line disclosure rows for the folded/expanded reasoning states. */
+const REASONING_ROWS: Record<'folded' | 'expanded', string> = {
+  folded: '▸ Thinking',
+  expanded: '▾ Thinking',
+}
+
+/**
  * Children of a settled assistant message: optional reasoning block then the
  * response text. A folded continuation (a later step of a turn while tool cards
  * are hidden) drops the `Assistant` header and renders nothing when it has no
@@ -194,24 +216,26 @@ export class UserMessageComponent extends Container {
  */
 function assistantMessageChildren(
   content: readonly ContentBlock[],
-  showReasoning: boolean,
+  reasoningMode: ReasoningMode,
   foldedContinuation: boolean,
   palette: Palette,
   mdTheme: MarkdownTheme,
 ): Component[] {
   const reasoning = displayText(textBlocks(content, 'reasoning').trim())
   const text = displayText(textBlocks(content, 'text').trim())
-  const showsReasoning = reasoning !== '' && showReasoning
+  const showsReasoning = reasoning !== '' && reasoningMode !== 'hidden'
   if (foldedContinuation && !showsReasoning && text === '') return []
   const children: Component[] = [new Spacer(1)]
   if (!foldedContinuation) {
     children.push(new Text(messageHeader('Assistant', palette.accent, palette), 0, 0))
   }
   if (showsReasoning) {
-    children.push(
-      new Text(palette.italic(palette.dim('Reasoning')), 0, 0),
-      new Markdown(reasoning, 0, 0, mdTheme, { color: value => palette.dim(value), italic: true }),
-    )
+    children.push(new Text(palette.italic(palette.dim(REASONING_ROWS[reasoningMode])), 0, 0))
+    if (reasoningMode === 'expanded') {
+      children.push(
+        new Markdown(reasoning, 0, 0, mdTheme, { color: value => palette.dim(value), italic: true }),
+      )
+    }
   }
   if (text) children.push(new Markdown(text, 0, 0, mdTheme, { color: value => palette.text(value) }))
   return children
@@ -280,7 +304,7 @@ export class StreamingAssistantComponent extends Container {
     events: () => readonly SessionEvent[],
     tracker: StepTimingTracker,
     now: () => number,
-    private showReasoning: boolean,
+    private reasoningMode: ReasoningMode,
     private readonly palette: Palette,
     private readonly mdTheme: MarkdownTheme,
   ) {
@@ -340,11 +364,11 @@ export class StreamingAssistantComponent extends Container {
   }
 
   /**
-   * Toggle whether reasoning blocks render, then re-render.
-   * @param show - Whether to show reasoning blocks.
+   * Change how reasoning blocks display, then re-render.
+   * @param mode - New reasoning display mode.
    */
-  setShowReasoning(show: boolean): void {
-    this.showReasoning = show
+  setReasoningMode(mode: ReasoningMode): void {
+    this.reasoningMode = mode
     this.rebuild()
   }
 
@@ -367,7 +391,7 @@ export class StreamingAssistantComponent extends Container {
   hasVisibleBody(): boolean {
     const content = this.presentedContent()
     return textBlocks(content, 'text').trim() !== ''
-      || (this.showReasoning && textBlocks(content, 'reasoning').trim() !== '')
+      || (this.reasoningMode !== 'hidden' && textBlocks(content, 'reasoning').trim() !== '')
   }
 
   /** The settled content when available, otherwise the streamed blocks in model order. */
@@ -385,7 +409,7 @@ export class StreamingAssistantComponent extends Container {
     this.clear()
     const children = assistantMessageChildren(
       this.presentedContent(),
-      this.showReasoning,
+      this.reasoningMode,
       this.foldedContinuation,
       this.palette,
       this.mdTheme,

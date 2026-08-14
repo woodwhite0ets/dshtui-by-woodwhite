@@ -29,6 +29,12 @@ export interface TuiStartup {
   readonly sessionId: SessionId
   /** Whether the session resumes persisted history. */
   readonly resume: boolean
+  /**
+   * Whether a bare launch explicitly requested a fresh session (`--new`), which
+   * suppresses the autoresume handoff that would otherwise recover the last
+   * non-empty session.
+   */
+  readonly new: boolean
 }
 
 declare module '@deepseek-ai/cordis' {
@@ -54,8 +60,9 @@ export function apply(ctx: Context): void {
     .description('Interactive terminal session over the DeepSeek Harness base')
     .helpOption('-h, --help')
     .option('--resume <session>', 'resume a persisted session by id')
+    .option('--new', 'start a fresh session instead of auto-resuming the last one')
   program.action(() => {
-    const options = program.opts<{ resume?: string }>()
+    const options = program.opts<{ resume?: string; new?: boolean }>()
     const resume = options.resume?.trim()
     if (options.resume !== undefined && (resume === undefined || resume === '')) {
       program.error('dsh --profile tui: --resume requires a non-empty session id')
@@ -65,7 +72,11 @@ export function apply(ctx: Context): void {
       ? { id: SessionId(`main-session-${randomUUID()}`), resume: false }
       : { id: SessionId(resume), resume: true }
     ctx.provide(CONFIGURED_AGENT_IDENTITIES_KEY, { [MAIN_AGENT_ID]: identity })
-    ctx.provide(TUI_STARTUP_SERVICE, { sessionId: identity.id, resume: identity.resume })
+    ctx.provide(TUI_STARTUP_SERVICE, {
+      sessionId: identity.id,
+      resume: identity.resume,
+      new: options.new === true && resume === undefined,
+    })
     ctx.provide('tuiGoodbyeMessage', `To resume this session: dsh --profile tui --resume=${identity.id}`)
     installResumeHost(ctx)
   })
@@ -87,14 +98,15 @@ export function installResumeHost(ctx: Context): void {
   // inheriting child there instead. POSIX replaces the process in place.
   const win32 = process.platform === 'win32'
   if (entry === undefined || (!win32 && execve === undefined)) return
-  // Launcher args minus every `--resume` occurrence, so the handoff target
-  // keeps the invoking profile and overlays while swapping the session.
+  // Launcher args minus every `--resume`/`--new` occurrence, so the handoff
+  // target keeps the invoking profile and overlays while swapping the session.
   const baseArgs: string[] = []
   const argv = process.argv.slice(2)
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index]
-    if (arg === undefined || arg.startsWith('--resume=')) continue
-    if (arg === '--resume') {
+    if (arg === undefined) continue
+    if (arg.startsWith('--resume=') || arg.startsWith('--new=')) continue
+    if (arg === '--resume' || arg === '--new') {
       index++
       continue
     }
@@ -108,13 +120,15 @@ export function installResumeHost(ctx: Context): void {
       try {
         process.chdir(cwd)
       } catch (error) {
-        throw new Error(`dsh-tui: cannot resume in "${cwd}": ${String(error)}`)
+        throw new Error(`dsh-tui: cannot enter workspace "${cwd}": ${String(error)}`)
       }
       try {
         await ctx.root.fiber.dispose()
         // `spawn` sets argv[0] itself, so the child args omit it (unlike the
         // execve argv, which carries it as the first element).
-        const childArgs = [...process.execArgv, entry, ...baseArgs, `--resume=${sessionId}`]
+        const childArgs = [...process.execArgv, entry, ...baseArgs]
+        if (sessionId !== undefined) childArgs.push(`--resume=${sessionId}`)
+        else childArgs.push('--new')
         if (win32) return await spawnHandoff(childArgs)
         execve!(process.execPath, [process.execPath, ...childArgs], process.env)
         throw new Error('process replacement returned unexpectedly')

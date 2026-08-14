@@ -28,7 +28,7 @@ import type { SessionRecord } from '@deepseek-ai/dsh-session-query'
 import type { AskUserQuestionItem } from '@deepseek-ai/dsh-user-questions'
 import { BRACKETED_PASTE_END, BRACKETED_PASTE_START, displayText, sanitizePastedText } from './text.ts'
 import { dialogSelectTheme, type Palette } from './theme.ts'
-import type { ToolCardVisibility } from './transcript.ts'
+import { REASONING_CYCLE, REASONING_LABELS, type ReasoningMode, type ToolCardVisibility } from './transcript.ts'
 import {
   renderTuiPromptTemplate,
   type TuiPromptTemplateToken,
@@ -430,7 +430,7 @@ export class ModelDialog implements Component {
 /** Both transcript-detail dimensions, applied immediately on each Tab. */
 export interface DetailsSelection {
   readonly visibility: ToolCardVisibility
-  readonly showReasoning: boolean
+  readonly reasoningMode: ReasoningMode
 }
 
 const TOOL_CARD_PHASES: readonly ToolCardVisibility[] = ['collapsed', 'expanded', 'hidden']
@@ -448,19 +448,15 @@ export class DetailsDialog implements Component {
 
   constructor(
     private visibility: ToolCardVisibility,
-    private showReasoning: boolean,
+    private reasoningMode: ReasoningMode,
     private readonly palette: Palette,
     private readonly apply: (selection: DetailsSelection) => void,
     private readonly close: () => void,
   ) {
     this.toolsItem = { value: 'tools', label: 'Tool cards', description: visibility }
-    this.reasoningItem = { value: 'reasoning', label: 'Reasoning', description: this.reasoningLabel() }
+    this.reasoningItem = { value: 'reasoning', label: 'Reasoning', description: REASONING_LABELS[reasoningMode] }
     this.list = new SelectList([this.toolsItem, this.reasoningItem], 2, dialogSelectTheme(palette))
     this.list.onSelect = close
-  }
-
-  private reasoningLabel(): string {
-    return this.showReasoning ? 'shown' : 'hidden'
   }
 
   /** Cycle the highlighted entry one step and apply the new state. */
@@ -473,10 +469,11 @@ export class DetailsDialog implements Component {
       this.visibility = TOOL_CARD_PHASES[(index + 1) % TOOL_CARD_PHASES.length] as ToolCardVisibility
       this.toolsItem.description = this.visibility
     } else {
-      this.showReasoning = !this.showReasoning
-      this.reasoningItem.description = this.reasoningLabel()
+      const index = REASONING_CYCLE.indexOf(this.reasoningMode)
+      this.reasoningMode = REASONING_CYCLE[(index + 1) % REASONING_CYCLE.length] as ReasoningMode
+      this.reasoningItem.description = REASONING_LABELS[this.reasoningMode]
     }
-    this.apply({ visibility: this.visibility, showReasoning: this.showReasoning })
+    this.apply({ visibility: this.visibility, reasoningMode: this.reasoningMode })
   }
 
   invalidate(): void {
@@ -514,6 +511,15 @@ export interface ResumeCandidate {
 }
 
 /**
+ * A persisted log at or below this size holds no conversation content — at
+ * most the header row and a couple of bookkeeping events — so resuming it
+ * would only mint a fresh-looking session from nothing. Sessions above the
+ * threshold carry real events (a single zstd-compressed dialogue line is
+ * already far larger than the whole file).
+ */
+export const EMPTY_SESSION_MAX_BYTES = 4096
+
+/**
  * Build one resume selector row from a record, its batch-folded title, and a
  * metadata-derived activity time, deriving the workspace scope and any reason
  * the session cannot be resumed here. A workspace other than the current one
@@ -527,6 +533,7 @@ export interface ResumeCandidate {
  * @param currentId - The current session id.
  * @param cwd - The CURRENT session's workspace, which decides the picker scope this row falls in.
  * @param formatWorkspace - Renders THIS record's own cwd as its prompt-style label.
+ * @param sizeBytes - Persisted log size; when known, a below-threshold log is an empty session and cannot be resumed.
  * @returns The summarized resume candidate.
  */
 export function summarizeResumeCandidate(
@@ -536,11 +543,15 @@ export function summarizeResumeCandidate(
   currentId: SessionId,
   cwd: string | undefined,
   formatWorkspace: (cwd: string | undefined) => string,
+  sizeBytes?: number,
 ): ResumeCandidate {
   let disabledReason: string | undefined
   if (record.header.id === currentId) disabledReason = 'current session'
   else if (record.live) disabledReason = 'session is already live in this runtime'
   else if (record.header.cwd === undefined) disabledReason = 'session has no recorded workspace'
+  else if (sizeBytes !== undefined && sizeBytes <= EMPTY_SESSION_MAX_BYTES) {
+    disabledReason = 'empty session'
+  }
   return {
     record,
     title: title ?? 'Untitled session',

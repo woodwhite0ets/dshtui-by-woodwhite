@@ -70,7 +70,7 @@ import type {
   TuiTheme,
 } from './extension/types.ts'
 import { displayInlineText, displayText } from './components/text.ts'
-import { brandText, createPalette, markdownTheme, renderPalette, selectTheme } from './components/theme.ts'
+import { brandText, createPalette, gradientText, markdownTheme, renderPalette, selectTheme } from './components/theme.ts'
 import { contentText, parseArguments } from './components/content.ts'
 import {
   cacheHitRate,
@@ -98,6 +98,9 @@ import {
 } from './config.ts'
 import {
   ContextCardComponent,
+  REASONING_CYCLE,
+  REASONING_LABELS,
+  type ReasoningMode,
   type ToolCardVisibility,
   HeaderComponent,
   StreamingAssistantComponent,
@@ -300,11 +303,13 @@ export function createTuiChat(
   const renderInputPrompt = (): string => renderTuiPromptTemplate(inputTemplate, valueName => ctx.tuiPrompt.get(valueName))
   const initialInputPrompt = renderInputPrompt()
   const editor = new HintEditor(ui, {
-    borderColor: palette.dim,
+    borderColor: palette.accent,
     selectList: selectTheme(palette),
   } satisfies EditorTheme, {
     paddingX: 1,
-    frame: 'none',
+    // Horizontal hairline frame: a DeepSeek-accent line above and below the
+    // input separates the prompt from the transcript and the terminal edge.
+    frame: 'horizontal',
     prompt: {
       first: initialInputPrompt,
       continuation: ' '.repeat(visibleWidth(initialInputPrompt)),
@@ -313,7 +318,7 @@ export function createTuiChat(
   editor.hintPrefix = initialInputPrompt
   const todo = new TodoComponent(palette)
   const compactionStatusLine = new Text('', 0, 0)
-  let showReasoning = resolved.showReasoning
+  let reasoningMode: ReasoningMode = resolved.showReasoning ? 'folded' : 'hidden'
   // Ctrl+O cycles collapsed -> expanded -> hidden. Codex-style: hidden drops
   // tool cards entirely, collapsed previews, expanded shows full bodies.
   let toolsVisibility: ToolCardVisibility = 'collapsed'
@@ -412,14 +417,16 @@ export function createTuiChat(
     )}`)
     const queued = runningStatus === undefined ? undefined : formatQueuedStatus(pendingSteering.size)
     queuedValue.set(queued === undefined ? undefined : palette.dim(queued))
-    symbolValue.set(palette.bold(palette.accent('dsh')))
+    symbolValue.set(resolved.theme.color && resolved.theme.truecolor
+      ? palette.bold(gradientText('dsh'))
+      : palette.bold(palette.accent('dsh')))
     compactionStatusLine.setText(compacting === undefined
       ? ''
       : palette.dim(`Context being compacted ${formatStatusDuration(renderTime - compacting.startedAt)}`))
     // `${indicator}` owns the caret column and its trailing gap before the
-    // cursor. The active status glyph replaces the `>` caret in place — same
+    // cursor. The active status glyph replaces the `❯` caret in place — same
     // width every frame — fading in when work starts, throbbing while it runs,
-    // and fading out after it ends before the plain `>` returns. Only the gray
+    // and fading out after it ends before the plain `❯` returns. Only the gray
     // brightness changes, so the cursor never shifts.
     const statusGlyph = runningPhaseGlyph(
       agent.session.events,
@@ -440,7 +447,7 @@ export function createTuiChat(
         ? { glyph: fadingStatus.glyph, level: Math.max(0, 1 - (renderTime - fadingStatus.endedAt) / STATUS_FADE_MS) }
         : undefined
     const caret = envelope === undefined
-      ? palette.dim('>')
+      ? palette.bold(palette.accent('❯'))
       : fadeGlyph(
         envelope.glyph,
         palette,
@@ -744,7 +751,7 @@ export function createTuiChat(
       () => agent.session.events,
       stepTimingTracker,
       now,
-      showReasoning,
+      reasoningMode,
       palette,
       mdTheme,
     )
@@ -1101,22 +1108,25 @@ export function createTuiChat(
       : toolsVisibility === 'expanded' ? 'hidden' : 'collapsed')
   }
 
-  const setReasoning = (show: boolean): void => {
-    showReasoning = show
+  const setReasoningMode = (mode: ReasoningMode): void => {
+    reasoningMode = mode
     const activeStreaming = streaming
     rebuildTranscript(false)
     /* v8 ignore next -- the non-streaming command path is covered; this branch preserves an active stream across rebuild. */
     if (activeStreaming !== undefined) {
       streaming = activeStreaming
-      streaming.setShowReasoning(showReasoning)
+      streaming.setReasoningMode(reasoningMode)
       registerAssistantStep(activeStreaming)
       chat.addChild(activeStreaming)
       chat.addChild(activeStreaming.timing)
     }
-    appendNotice(`Reasoning blocks ${showReasoning ? 'shown' : 'hidden'}.`)
+    appendNotice(`Reasoning blocks ${REASONING_LABELS[reasoningMode]}.`)
   }
 
-  const toggleReasoning = (): void => { setReasoning(!showReasoning) }
+  // Ctrl+R cycles hidden -> folded -> expanded (fully shown) -> hidden.
+  const cycleReasoning = (): void => {
+    setReasoningMode(REASONING_CYCLE[(REASONING_CYCLE.indexOf(reasoningMode) + 1) % REASONING_CYCLE.length] as ReasoningMode)
+  }
 
   // The selector and the argument grammar mutate the same closure state the
   // Ctrl+O cycle and Ctrl+R toggle drive, so every entry converges.
@@ -1126,11 +1136,11 @@ export function createTuiChat(
     const session = overlayManager.open({
       create: () => new DetailsDialog(
         toolsVisibility,
-        showReasoning,
+        reasoningMode,
         palette,
         // Each Tab applies immediately; one dimension changes per call.
         (selection: DetailsSelection) => {
-          if (selection.showReasoning !== showReasoning) setReasoning(selection.showReasoning)
+          if (selection.reasoningMode !== reasoningMode) setReasoningMode(selection.reasoningMode)
           if (selection.visibility !== toolsVisibility) setToolsVisibility(selection.visibility)
         },
         () => { void session.close() },
@@ -1153,7 +1163,7 @@ export function createTuiChat(
       return { kind: 'success' }
     }
     let visibility: ToolCardVisibility | undefined
-    let reasoning: boolean | undefined
+    let reasoning: ReasoningMode | undefined
     for (let token = tokens.shift(); token !== undefined; token = tokens.shift()) {
       if (token === 'collapsed' || token === 'expanded' || token === 'hidden') {
         visibility = token
@@ -1161,16 +1171,18 @@ export function createTuiChat(
         const value = tokens[0]
         if (value === 'on' || value === 'off') {
           tokens.shift()
-          reasoning = value === 'on'
+          // `on` fully shows the blocks; `off` drops them. Bare `reasoning`
+          // toggles visibility between the hidden and folded defaults.
+          reasoning = value === 'on' ? 'expanded' : 'hidden'
         } else {
-          reasoning = !showReasoning
+          reasoning = reasoningMode === 'hidden' ? 'folded' : 'hidden'
         }
       } else {
         return { kind: 'error', text: `Unknown /details argument "${token}". Usage: /details [collapsed|expanded|hidden] [reasoning [on|off]]` }
       }
     }
     // Reasoning first: its transcript rebuild would drop the visibility notice.
-    if (reasoning !== undefined) setReasoning(reasoning)
+    if (reasoning !== undefined) setReasoningMode(reasoning)
     if (visibility !== undefined) setToolsVisibility(visibility)
     return { kind: 'success' }
   }
@@ -1184,7 +1196,7 @@ export function createTuiChat(
     chat.addChild(new Text(palette.bold(palette.accent('Keyboard shortcuts')), 0, 0))
     chat.addChild(new Text([
       'Enter send • Shift/Alt+Enter newline • Up/Down prompt history',
-      'Esc cancel turn • Ctrl+O cycle cards (collapse/expand/hide) • Ctrl+R toggle reasoning • Ctrl+L redraw',
+      'Esc cancel turn • Ctrl+O cycle cards (collapse/expand/hide) • Ctrl+R cycle thinking (fold/show/hide) • Ctrl+L redraw',
       'Ctrl+C cancel while running; clear input or exit while idle • Ctrl+D exit',
       '',
       ...commandLines,
@@ -1232,7 +1244,7 @@ export function createTuiChat(
         ['Session', displayText(agent.session.id)],
         ['Title', displayText(sessionTitle ?? 'untitled')],
         ['Directory', displayText(cwd)],
-        ['Model', `${model} ${palette.dim(`(effort ${effort}; reasoning blocks ${showReasoning ? 'shown' : 'hidden'})`)}`],
+        ['Model', `${model} ${palette.dim(`(effort ${effort}; reasoning blocks ${REASONING_LABELS[reasoningMode]})`)}`],
       ],
       [
         ['Agent', [
@@ -1380,6 +1392,26 @@ export function createTuiChat(
       name: 'resume',
       description: 'List this workspace\'s resumable sessions',
       handler: () => { resume.showResume(); return { kind: 'success' } },
+    })
+    commandCtx.commands.register({
+      name: 'new',
+      description: 'Start a fresh session in this workspace (the current one stays persisted)',
+      handler: async () => {
+        const host = runtime.handoffResume
+        if (host === undefined) {
+          appendNotice('This host cannot start a fresh session in place.', 'warning')
+          return { kind: 'success' }
+        }
+        if (agent.status !== 'idle') {
+          appendNotice('Start a new session after the current turn finishes or is cancelled.', 'warning')
+          return { kind: 'success' }
+        }
+        await agent.ctx.sessions.flush(agent.session)
+        // The replacement re-enters without --resume (plus --new, which keeps
+        // the autoresume row out of the way), minting a fresh session.
+        await host(undefined, process.cwd())
+        return { kind: 'success' }
+      },
     })
     commandCtx.commands.register({
       name: 'status',
@@ -1641,7 +1673,7 @@ export function createTuiChat(
       return { consume: true }
     }
     if (matchesKey(data, Key.ctrl('r'))) {
-      toggleReasoning()
+      cycleReasoning()
       return { consume: true }
     }
     if (matchesKey(data, Key.ctrl('l'))) {

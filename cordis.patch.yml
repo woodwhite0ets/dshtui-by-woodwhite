@@ -49,6 +49,12 @@
     - id: tui-startup
       name: '@woodwhite0ets/dsh-tui/startup'
 
+    # A bare launch (no `--resume`) hands off into the current workspace's
+    # most recently active non-empty session instead of minting a fresh one.
+    - id: tui-autoresume
+      name: '@woodwhite0ets/dsh-tui/autoresume'
+      inject: [tuiStartup]
+
     # `@session` references in the composer.
     - id: session-reference
       name: '@deepseek-ai/dsh-session-reference'

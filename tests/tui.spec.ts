@@ -1044,13 +1044,18 @@ describe('goodbye message and /resume', () => {
     const events = resumeEvents('Assistant route', 'absent-provider')
       .filter(event => event.type !== 'request/header')
       .map((event, seq) => ({ ...event, seq })) as SessionEvent[]
+    // Routeless but above the empty-session event threshold: the preflight's
+    // route fold falls back to absence, so only the absent host stops it.
+    const routeless = resumeEvents('Routeless', 'deepseek-official')
+      .filter(event => event.type !== 'request/header' && event.type !== 'assistant/message')
+      .map((event, seq) => ({ ...event, seq })) as SessionEvent[]
     const result = await setup({
       cwd: '/workspace',
       sessionPersistence: {
         list: async () => [assistantOnly, empty],
         load: async id => id === assistantOnly.id
           ? { meta: assistantOnly, events }
-          : { meta: empty, events: [] },
+          : { meta: empty, events: routeless },
       },
     })
     result.terminal.send('/resume')
@@ -1668,11 +1673,16 @@ describe('pi-tui chat lifecycle and transcript', () => {
     expect(result.terminal.output).toContain('DEEPSEEK')
     expect(result.terminal.output).toContain('Coding agent ready.')
     expect(result.terminal.output).toContain('restored prompt')
+    // Reasoning renders folded by default: one disclosure row, no body.
+    expect(result.terminal.output).toContain('▸ Thinking')
+    expect(result.terminal.output).not.toContain('restored thought')
+    result.terminal.send('\x12') // Ctrl+R: folded -> expanded
+    await tick()
     expect(result.terminal.output).toContain('restored thought')
     expect(result.terminal.output).toContain('restored answer')
     expect(result.terminal.output).toContain('write tests')
     expect(result.terminal.output).toContain('/opt (tui-staging)  deepseek-v4-flash  ↑1.3k ↓42')
-    expect(result.terminal.output).toContain('dsh > ')
+    expect(result.terminal.output).toContain('dsh ❯ ')
     expect(result.terminal.output).not.toContain('main-session  deepseek-v4-flash')
     // Context resolution is async (resolveModelContext); settle before reading.
     await tick()
@@ -1782,9 +1792,18 @@ describe('pi-tui chat lifecycle and transcript', () => {
       chunk: { type: 'usage', usage: { inputTokens: 1, outputTokens: 2 } },
     })
     await tick()
-    expect(result.terminal.output).toContain('live thought')
-    result.terminal.send('\x12')
+    // Folded: the live reasoning stream shows its disclosure row only. The
+    // earlier Ctrl+R left reasoning expanded (the streamed body was already
+    // painted), so cycle back to folded and assert the current frame.
+    result.terminal.output = ''
+    result.terminal.send('\x12') // expanded -> hidden
+    result.terminal.send('\x12') // hidden -> folded
     await tick()
+    expect(result.terminal.output).toContain('▸ Thinking')
+    expect(result.terminal.output).not.toContain('live thought')
+    result.terminal.send('\x12') // Ctrl+R: folded -> expanded
+    await tick()
+    expect(result.terminal.output).toContain('live thought complete')
     appendAssistant(
       result.session,
       [{ type: 'text', text: 'final live answer' }],
@@ -2283,7 +2302,7 @@ describe('pi-tui chat lifecycle and transcript', () => {
     clock = 1_000
 
     // A space separates `dsh` from the caret slot: the prompt reads
-    // `dsh <glyph> ` with the same visible width as the idle `dsh > `, so the
+    // `dsh <glyph> ` with the same visible width as the idle `dsh ❯ `, so the
     // cursor never shifts. Assert both the glyph slot and that constant width
     // (color is off in this harness, so output carries no ANSI to strip).
     // Each phase swaps only the glyph character in the same slot at equal width.
@@ -2315,7 +2334,7 @@ describe('pi-tui chat lifecycle and transcript', () => {
       const rows = result.terminal.output.split(/\r?\n|\x1b\[[0-9;]*[A-Za-z]/u).filter(r => r.includes('dsh'))
       return rows.at(-1) ?? ''
     }
-    expect(promptRow()).toContain('dsh > ')
+    expect(promptRow()).toContain('dsh ❯ ')
     expect(promptRow()).not.toMatch(/dsh(?:\x1b\[[0-9;]*m| )*[◍✻●⚙⊙]/u)
     expect(promptWidth(result.terminal.output)).toBe(runningWidth)
 
@@ -2350,7 +2369,7 @@ describe('pi-tui chat lifecycle and transcript', () => {
     result.session.append('compaction/start', { turn: 1 })
     await tick()
 
-    expect(result.terminal.output).toContain('dsh > ')
+    expect(result.terminal.output).toContain('dsh ❯ ')
     expect(result.terminal.output).not.toContain('dsh ⊙ ')
     expect(result.terminal.progress.at(-1)).toBe(false)
     await dispose(result)
@@ -2371,7 +2390,7 @@ describe('pi-tui chat lifecycle and transcript', () => {
     result.terminal.resize(result.terminal.columns + 1)
     await tick()
 
-    expect(result.terminal.output).toContain('dsh > ')
+    expect(result.terminal.output).toContain('dsh ❯ ')
     expect(result.terminal.output).not.toMatch(/dsh [◍✻●⚙⊙]/u)
     expect(result.terminal.output).not.toContain('Context being compacted')
     expect(result.terminal.progress.at(-1)).toBe(false)
@@ -2469,7 +2488,7 @@ describe('pi-tui chat lifecycle and transcript', () => {
       },
     })
 
-    expect(result.terminal.output).toContain('dsh > ')
+    expect(result.terminal.output).toContain('dsh ❯ ')
     expect(result.terminal.output).not.toContain('dsh ⊙ ')
     expect(result.terminal.output).not.toContain('Context being compacted')
     expect(result.terminal.progress.at(-1)).toBe(false)
@@ -2575,7 +2594,7 @@ describe('pi-tui chat lifecycle and transcript', () => {
     await new Promise(resolve => setTimeout(resolve, 120))
     await tick()
     expect(result.terminal.output).not.toMatch(/dsh(?:\x1b\[[0-9;]*m| )*●/u)
-    expect(result.terminal.output).toContain('>')
+    expect(result.terminal.output).toContain('❯')
 
     await dispose(result)
   })
@@ -2605,7 +2624,7 @@ describe('pi-tui chat lifecycle and transcript', () => {
 
   it('shows the plain prompt caret while idle', async () => {
     const result = await setup({ now: () => 0 })
-    expect(result.terminal.output).toContain('dsh > ')
+    expect(result.terminal.output).toContain('dsh ❯ ')
     expect(result.terminal.output).not.toMatch(/dsh [◍✻●⚙⊙]/u)
     await dispose(result)
   })
@@ -2991,7 +3010,7 @@ describe('pi-tui chat lifecycle and transcript', () => {
     await tick()
 
     expect(result.terminal.output).toContain('untitled')
-    expect(result.terminal.output).toContain('unset (effort unset; reasoning blocks shown)')
+    expect(result.terminal.output).toContain('unset (effort unset; reasoning blocks folded)')
     // The /status invocation's command/run lands directly on the empty log — no turn wraps it.
     expect(result.terminal.output).toContain('idle · 1 event · 0 turns · 0 steps · 0 tool calls')
     expect(result.terminal.output).toContain('n/a (0 read + 0 write)')
@@ -3075,11 +3094,11 @@ describe('pi-tui chat lifecycle and transcript', () => {
     await tick()
     expect(result.terminal.output).toContain('Tool and context cards collapsed.')
 
-    // The reasoning entry toggles the same way.
+    // The reasoning entry toggles the same way (folded -> expanded).
     result.terminal.send('\x1b[B')
     result.terminal.send('\t')
     await tick()
-    expect(result.terminal.output).toContain('Reasoning blocks hidden.')
+    expect(result.terminal.output).toContain('Reasoning blocks shown.')
 
     // Enter closes without further changes.
     const entered = result.terminal.output.length
@@ -3090,7 +3109,7 @@ describe('pi-tui chat lifecycle and transcript', () => {
     // Esc and Ctrl+C also close; the reopened dialog shows the live values.
     const reopened = await open()
     expect(result.terminal.output.slice(reopened)).toContain('collapsed')
-    expect(result.terminal.output.slice(reopened)).toContain('hidden')
+    expect(result.terminal.output.slice(reopened)).toContain('shown')
     result.terminal.send('\x1b')
     await tick()
     const ctrlCOutput = await open()
@@ -3901,7 +3920,7 @@ describe('pi-tui chat lifecycle and transcript', () => {
     result.terminal.send('/status')
     result.terminal.send('\r')
     await tick()
-    expect(result.terminal.output).toContain('beta/b1 (effort max; reasoning blocks shown)')
+    expect(result.terminal.output).toContain('beta/b1 (effort max; reasoning blocks folded)')
 
     const assembly = await result.ctx.systemPrompt.assemble(assembleContextFor(result.agent))
     expect(assembly.variables).toMatchObject({ provider: 'beta', model: 'b1' })
@@ -6164,7 +6183,7 @@ describe('TUI user-interaction dialogs', () => {
     await tick()
     expect(result.terminal.output).toContain('long question?')
     expect(result.terminal.output).toContain('Esc cancel')
-    result.terminal.resize(60, 4)
+    result.terminal.resize(60, 6) // 6 rows minus the 3-row framed editor leaves 3
     result.terminal.send('\r')
     await tick()
     expect(result.terminal.output).toContain('Enter an answer')
@@ -6217,7 +6236,7 @@ describe('TUI user-interaction dialogs', () => {
     const result = await setup({
       config: { questionDialogWidth: 60, questionDialogMaxHeight: 6 },
     })
-    result.terminal.resize(60, 3)
+    result.terminal.resize(60, 5) // 5 rows minus the 3-row framed editor leaves 2
     const answer = result.ctx.userQuestions.ask({
       questions: [{ id: 'two-row-dialog', question: 'Answer this deliberately long question?' }],
     })

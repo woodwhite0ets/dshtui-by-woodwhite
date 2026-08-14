@@ -150,7 +150,7 @@ describe('resume handoff host', () => {
     chdir.mockImplementation(() => { throw new Error('ENOENT') })
     installResumeHost(ctx as unknown as Context)
     const handoff = hostOf(ctx)
-    await expect(handoff('sess-1', '/missing')).rejects.toThrow('cannot resume in')
+    await expect(handoff('sess-1', '/missing')).rejects.toThrow('cannot enter workspace')
     expect(ctx.root.fiber.dispose).not.toHaveBeenCalled()
     expect(spawnMock).not.toHaveBeenCalled()
   })
@@ -165,6 +165,26 @@ describe('resume handoff host', () => {
     const pending = handoff('sess-1', '/workspace')
     await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled())
     expect(spawnMock.mock.calls[0][1]).toEqual(expectedChildArgs('sess-1'))
+    child.emit('exit', 0)
+    expect(exitCode).toBe(0)
+  })
+
+  it('re-enters with --new instead of --resume when handed no session id', async () => {
+    platform.mockReturnValue('win32')
+    argv.mockReturnValue(['node', '/entry.js', '--profile', 'tui'])
+    const child = new EventEmitter()
+    spawnMock.mockReturnValue(child as never)
+    installResumeHost(ctx as unknown as Context)
+    const handoff = hostOf(ctx)
+    const pending = handoff(undefined, '/workspace')
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled())
+    expect(spawnMock.mock.calls[0][1]).toEqual([
+      ...process.execArgv,
+      '/entry.js',
+      '--profile',
+      'tui',
+      '--new',
+    ])
     child.emit('exit', 0)
     expect(exitCode).toBe(0)
   })

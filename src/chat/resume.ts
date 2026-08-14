@@ -29,6 +29,9 @@ import {
 } from '../components/dialogs.ts'
 import type { ChannelNotice, ChatChannelDeps } from './channel.ts'
 
+/** A replayed log with at most this many events has no conversation to resume. */
+const EMPTY_SESSION_MAX_EVENTS = 4
+
 /** Collaborators the resume controller needs from the chat channel. */
 export interface ResumeControllerDeps extends ChatChannelDeps, ChannelNotice {
   readonly agent: Agent
@@ -74,43 +77,46 @@ export function createResumeController(deps: ResumeControllerDeps): ResumeContro
   const summarize = (
     record: SessionRecord,
     title: string | undefined,
-    lastActivityAt: number | undefined,
+    activity: { time: number; size?: number } | undefined,
   ): ResumeCandidate => summarizeResumeCandidate(
     record,
     title,
-    lastActivityAt,
+    activity?.time,
     agent.session.id,
     agent.session.header.cwd,
     workspaceLabel,
+    activity?.size,
   )
 
   /** The disabled fallback row for a session whose title read failed. */
   const unreadableCandidate = (
     record: SessionRecord,
-    lastActivityAt: number | undefined,
+    activity: { time: number; size?: number } | undefined,
     error: unknown,
   ): ResumeCandidate => ({
     record,
     title: 'Unreadable session',
-    lastActivityAt: lastActivityAt ?? record.header.createdAt,
+    lastActivityAt: activity?.time ?? record.header.createdAt,
     currentWorkspace: record.header.cwd === agent.session.header.cwd,
     workspaceLabel: workspaceLabel(record.header.cwd),
     disabledReason: `session cannot be loaded: ${errorChain(error)}`,
   })
 
   /**
-   * Metadata-only activity time: a live session's last in-memory event time,
-   * otherwise the persisted artifact's mtime. Never reads a log, so browsing
-   * cost stays independent of log size; any append (including bookkeeping)
-   * moves it.
+   * Metadata-only activity: a live session's last in-memory event time,
+   * otherwise the persisted artifact's mtime and size. Never reads a log, so
+   * browsing cost stays independent of log size; any append (including
+   * bookkeeping) moves the mtime, and the size tells the picker which rows are
+   * empty shells.
    */
-  const lastActivityAt = async (record: SessionRecord): Promise<number | undefined> => {
+  const lastActivityAt = async (record: SessionRecord): Promise<{ time: number; size?: number } | undefined> => {
     const live = ctx.sessions.get(record.header.id)
-    if (live !== undefined) return live.events.at(-1)?.time
+    if (live !== undefined) return { time: live.events.at(-1)?.time ?? record.header.createdAt }
     const location = ctx.get('sessionPersistence')?.locate(record.header)
     if (location === undefined) return undefined
     try {
-      return (await stat(location.path)).mtimeMs
+      const info = await stat(location.path)
+      return { time: info.mtimeMs, size: info.size }
     } catch {
       // Only a just-deleted or never-materialized artifact fails stat; the row falls back to created-at.
       return undefined
@@ -218,6 +224,12 @@ export function createResumeController(deps: ResumeControllerDeps): ResumeContro
       events = (await query.readSession(record.header.id)).events
     } catch (error: unknown) {
       throw new Error(`session cannot be loaded: ${errorChain(error)}`)
+    }
+    // The picker disables empty shells by file size, but the preflight's own
+    // replay is authoritative: a log with only header/bookkeeping events has
+    // nothing to resume.
+    if (events.length <= EMPTY_SESSION_MAX_EVENTS) {
+      throw new Error(`session is empty (${events.length} event${events.length === 1 ? '' : 's'}, no conversation content)`)
     }
     const route = resumeRoute(events)
     if (route !== undefined && !ctx.llm.listProviders().some(provider => provider.id === route.provider)) {
