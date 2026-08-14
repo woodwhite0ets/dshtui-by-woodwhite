@@ -57,14 +57,19 @@ describe('resume handoff host', () => {
     spawnMock.mockReset()
   })
 
-  /** The exact target argv the handoff rebuilds: entry plus launcher args minus --resume. */
-  const expectedTarget = (session: string): string[] => [
-    process.execPath,
+  /** The exact child argv the handoff rebuilds, without argv[0]: spawn supplies it. */
+  const expectedChildArgs = (session: string): string[] => [
     ...process.execArgv,
     '/entry.js',
     '--profile',
     'tui',
     `--resume=${session}`,
+  ]
+
+  /** The execve argv, which carries argv[0] as its first element. */
+  const expectedExecveArgv = (session: string): string[] => [
+    process.execPath,
+    ...expectedChildArgs(session),
   ]
 
   it('spawns an inheriting child on Windows instead of execve', async () => {
@@ -79,7 +84,7 @@ describe('resume handoff host', () => {
     expect(spawnMock).toHaveBeenCalledTimes(1)
     const [file, target, options] = spawnMock.mock.calls[0] as [string, string[], { stdio: 'inherit'; env: NodeJS.ProcessEnv }]
     expect(file).toBe(process.execPath)
-    expect(target).toEqual(expectedTarget('sess-1'))
+    expect(target).toEqual(expectedChildArgs('sess-1'))
     expect(options.stdio).toBe('inherit')
     // The parent hands over only once the child exits: console stays owned.
     expect(exitCode).toBeUndefined()
@@ -120,7 +125,7 @@ describe('resume handoff host', () => {
     const handoff = hostOf(ctx)
     const pending = handoff('sess-1', '/workspace')
     await vi.waitFor(() => expect(execve).toHaveBeenCalled())
-    expect(execve).toHaveBeenCalledWith(process.execPath, expectedTarget('sess-1'), process.env)
+    expect(execve).toHaveBeenCalledWith(process.execPath, expectedExecveArgv('sess-1'), process.env)
     // execve returning at all is unexpected: the host reports and exits.
     await pending
     expect(stderr).toHaveBeenCalledWith(expect.stringContaining('returned unexpectedly'))
@@ -159,7 +164,7 @@ describe('resume handoff host', () => {
     const handoff = hostOf(ctx)
     const pending = handoff('sess-1', '/workspace')
     await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled())
-    expect(spawnMock.mock.calls[0][1]).toEqual(expectedTarget('sess-1'))
+    expect(spawnMock.mock.calls[0][1]).toEqual(expectedChildArgs('sess-1'))
     child.emit('exit', 0)
     expect(exitCode).toBe(0)
   })

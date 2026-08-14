@@ -112,9 +112,11 @@ export function installResumeHost(ctx: Context): void {
       }
       try {
         await ctx.root.fiber.dispose()
-        const target = [process.execPath, ...process.execArgv, entry, ...baseArgs, `--resume=${sessionId}`]
-        if (win32) return await spawnHandoff(target)
-        execve!(process.execPath, target, process.env)
+        // `spawn` sets argv[0] itself, so the child args omit it (unlike the
+        // execve argv, which carries it as the first element).
+        const childArgs = [...process.execArgv, entry, ...baseArgs, `--resume=${sessionId}`]
+        if (win32) return await spawnHandoff(childArgs)
+        execve!(process.execPath, [process.execPath, ...childArgs], process.env)
         throw new Error('process replacement returned unexpectedly')
       } catch (error) {
         process.stderr.write(`dsh-tui: resume handoff failed after terminal release: ${String(error)}\n`)
@@ -129,12 +131,13 @@ export function installResumeHost(ctx: Context): void {
  * Windows handoff: spawn the dsh entry as an inheriting child and park the
  * parent until the child exits, so the console never returns to the shell
  * mid-session and the child owns it for its whole run.
- * @param target - `process.execPath` plus the normalized `--resume` argv.
+ * @param childArgs - The normalized `--resume` argv without argv[0]; spawn
+ *   supplies `process.execPath` as the file.
  * @returns A never-settling promise; the process exits through the child's
  *   `exit` event, or through the outer handoff catch on a spawn failure.
  */
-function spawnHandoff(target: readonly string[]): Promise<never> {
-  const child = spawn(process.execPath, [...target], { stdio: 'inherit', env: process.env })
+function spawnHandoff(childArgs: readonly string[]): Promise<never> {
+  const child = spawn(process.execPath, [...childArgs], { stdio: 'inherit', env: process.env })
   return new Promise<never>((_resolve, reject) => {
     child.once('error', reject)
     child.once('exit', code => process.exit(code ?? 0))
